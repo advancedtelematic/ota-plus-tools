@@ -55,7 +55,9 @@ fn parser<'a, 'b>() -> App<'a, 'b> {
         .settings(&[AppSettings::SubcommandRequiredElseHelp])
         .arg(
             Arg::with_name("path")
-                .help("The path to the settings and local cache")
+                .help(
+                    "The path to the settings and local cache. Defaults to HOME.",
+                )
                 .short("p")
                 .long("path")
                 .takes_value(true),

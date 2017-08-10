@@ -100,6 +100,14 @@ impl TargetsMetadata {
     pub fn targets(&self) -> &HashMap<TargetPath, TargetDescription> {
         &self.targets
     }
+
+    pub fn add_target(&mut self, path: TargetPath, description: TargetDescription) {
+        let _ = self.targets.insert(path, description);
+    }
+
+    pub fn remove_target(&mut self, path: &TargetPath) {
+        let _ = self.targets.remove(path);
+    }
 }
 
 impl Metadata for TargetsMetadata {
@@ -228,7 +236,7 @@ impl<'de> Deserialize<'de> for TargetPath {
 /// Description of a target, used in verification.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TargetDescription {
-    size: u64,
+    length: u64,
     hashes: HashMap<HashAlgorithm, HashValue>,
 }
 
@@ -237,7 +245,7 @@ impl TargetDescription {
     ///
     /// Note: Creating this manually could lead to errors, and the `from_reader` method is
     /// preferred.
-    pub fn new(size: u64, hashes: HashMap<HashAlgorithm, HashValue>) -> Result<Self> {
+    pub fn new(length: u64, hashes: HashMap<HashAlgorithm, HashValue>) -> Result<Self> {
         if hashes.is_empty() {
             bail!(ErrorKind::IllegalArgument(
                 "Cannot have empty set of hashes".into(),
@@ -245,12 +253,12 @@ impl TargetDescription {
         }
 
         Ok(TargetDescription {
-            size: size,
+            length: length,
             hashes: hashes,
         })
     }
 
-    /// Read the from the given reader and calculate the size and hash values.
+    /// Read the from the given reader and calculate the length and hash values.
     ///
     /// ```
     /// extern crate data_encoding;
@@ -267,7 +275,7 @@ impl TargetDescription {
     ///
     ///     let target_description =
     ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha256]).unwrap();
-    ///     assert_eq!(target_description.size(), bytes.len() as u64);
+    ///     assert_eq!(target_description.length(), bytes.len() as u64);
     ///     assert_eq!(target_description.hashes().get(&HashAlgorithm::Sha256), Some(&sha256));
     ///
     ///     let s ="tuIxwKybYdvJpWuUj6dubvpwhkAozWB6hMJIRzqn2jOUdtDTBg381brV4K\
@@ -276,7 +284,7 @@ impl TargetDescription {
     ///
     ///     let target_description =
     ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha512]).unwrap();
-    ///     assert_eq!(target_description.size(), bytes.len() as u64);
+    ///     assert_eq!(target_description.length(), bytes.len() as u64);
     ///     assert_eq!(target_description.hashes().get(&HashAlgorithm::Sha512), Some(&sha512));
     /// }
     /// ```
@@ -284,16 +292,16 @@ impl TargetDescription {
     where
         R: Read,
     {
-        let (size, hashes) = crypto::calculate_hashes(read, hash_algs)?;
+        let (length, hashes) = crypto::calculate_hashes(read, hash_algs)?;
         Ok(TargetDescription {
-            size: size,
+            length: length,
             hashes: hashes,
         })
     }
 
-    /// The maximum size of the target.
-    pub fn size(&self) -> u64 {
-        self.size
+    /// The maximum length of the target.
+    pub fn length(&self) -> u64 {
+        self.length
     }
 
     /// An immutable reference to the list of calculated hashes.

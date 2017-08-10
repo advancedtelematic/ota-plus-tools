@@ -55,12 +55,12 @@ impl TargetsMetadata {
 
 #[derive(Deserialize)]
 pub struct TargetDescription {
-    size: u64,
+    length: u64,
     hashes: HashMap<crypto::HashAlgorithm, crypto::HashValue>,
 }
 
 impl TargetDescription {
     pub fn try_into(self) -> Result<tuf::TargetDescription> {
-        tuf::TargetDescription::new(self.size, self.hashes)
+        tuf::TargetDescription::new(self.length, self.hashes)
     }
 }

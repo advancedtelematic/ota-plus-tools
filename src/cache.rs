@@ -74,7 +74,19 @@ impl Cache {
         NamedTempFile::new_in(&self.path.join("temp")).chain_err(|| "Failed to create temp file")
     }
 
-    pub fn unsigned_targets(&self, targets: &TargetsMetadata) -> Result<()> {
+    pub fn load_targets(&self) -> Result<TargetsMetadata> {
+        match &self.config.interchange {
+            &InterchangeType::Json => {
+                let file = File::open(self.path.join("metadata").join("unsigned").join(format!(
+                    "targets.{}",
+                    Json::extension()
+                )))?;
+                Json::from_reader(file)
+            }
+        }
+    }
+
+    pub fn unsigned_targets(&self, targets: &TargetsMetadata, force: bool) -> Result<()> {
         let temp = self.tempfile()?;
         match &self.config.interchange {
             &InterchangeType::Json => {
@@ -82,10 +94,16 @@ impl Cache {
                     || "Failed to write metadata to temp file",
                 )?;
 
-                temp.persist_noclobber(self.path.join("metadata").join("unsigned").join(format!(
+                let path = self.path.join("metadata").join("unsigned").join(format!(
                     "targets.{}",
                     Json::extension()
-                ))).map(|_| ())
+                ));
+                
+                (if force {
+                    temp.persist(path)
+                } else {
+                    temp.persist_noclobber(path) 
+                }).map(|_| ())
                     .map_err(|e| {
                         let e: Error = e.into();
                         e

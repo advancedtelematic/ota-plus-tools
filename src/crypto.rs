@@ -290,4 +290,3 @@ pub enum HashAlgorithm {
     #[serde(rename = "sha512")]
     Sha512,
 }
-

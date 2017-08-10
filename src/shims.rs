@@ -24,7 +24,7 @@ fn format_datetime(ts: &DateTime<Utc>) -> String {
 
 #[derive(Serialize, Deserialize)]
 pub struct TargetsMetadata {
-    #[serde(rename = "type")]
+    #[serde(rename = "_type")]
     typ: tuf::Role,
     version: u32,
     expires: String,
@@ -49,11 +49,7 @@ impl TargetsMetadata {
             )));
         }
 
-        tuf::TargetsMetadata::new(
-            self.version,
-            parse_datetime(&self.expires)?,
-            self.targets,
-        )
+        tuf::TargetsMetadata::new(self.version, parse_datetime(&self.expires)?, self.targets)
     }
 }
 
@@ -68,4 +64,3 @@ impl TargetDescription {
         tuf::TargetDescription::new(self.size, self.hashes)
     }
 }
-

@@ -10,10 +10,18 @@ use std::io::{Read, Write};
 
 use error::Result;
 
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub enum InterchangeType {
+    #[serde(rename = "json")]
+    Json,
+}
+
 /// The format used for data interchange, serialization, and deserialization.
 pub trait DataInterchange: Debug + PartialEq + Clone {
     /// The type of data that is contained in the `signed` portion of metadata.
     type RawData: Serialize + DeserializeOwned + Clone + PartialEq;
+
+    fn typ() -> InterchangeType;
 
     /// The data interchange's extension.
     fn extension() -> &'static str;
@@ -60,6 +68,10 @@ impl DataInterchange for Json {
     /// ```
     fn extension() -> &'static str {
         "json"
+    }
+
+    fn typ() -> InterchangeType {
+        InterchangeType::Json
     }
 
     /// ```

@@ -16,16 +16,12 @@ use shims;
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub enum Role {
     /// The root role.
-    #[serde(rename = "root")]
     Root,
     /// The snapshot role.
-    #[serde(rename = "snapshot")]
     Snapshot,
     /// The targets role.
-    #[serde(rename = "targets")]
     Targets,
     /// The timestamp role.
-    #[serde(rename = "timestamp")]
     Timestamp,
 }
 
@@ -131,7 +127,7 @@ impl<'de> Deserialize<'de> for TargetsMetadata {
         let intermediate: shims::TargetsMetadata = Deserialize::deserialize(de)?;
         intermediate.try_into().map_err(|e| {
             DeserializeError::custom(format!("{:?}", e))
-        })   
+        })
     }
 }
 
@@ -314,6 +310,6 @@ impl<'de> Deserialize<'de> for TargetDescription {
         let intermediate: shims::TargetDescription = Deserialize::deserialize(de)?;
         intermediate.try_into().map_err(|e| {
             DeserializeError::custom(format!("{:?}", e))
-        })   
+        })
     }
 }

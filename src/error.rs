@@ -2,6 +2,7 @@ use chrono;
 use data_encoding;
 use json;
 use std::io;
+use tempfile;
 use toml;
 
 error_chain! {
@@ -10,6 +11,7 @@ error_chain! {
         DataEncoding(data_encoding::DecodeError);
         Io(io::Error);
         Json(json::Error);
+        TempfilePersist(tempfile::PersistError);
         TomlDeserialize(toml::de::Error);
         TomlSerialize(toml::ser::Error);
     }

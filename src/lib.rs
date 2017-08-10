@@ -12,6 +12,7 @@ extern crate serde_json as json;
 #[cfg(test)]
 #[macro_use]
 extern crate serde_json as json;
+extern crate tempfile;
 extern crate toml;
 
 pub mod cache;

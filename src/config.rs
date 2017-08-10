@@ -1,8 +1,12 @@
+use interchange::InterchangeType;
+
 #[derive(Serialize, Deserialize)]
-pub struct Config {}
+pub struct Config {
+    pub interchange: InterchangeType,
+}
 
 impl Default for Config {
     fn default() -> Self {
-        Config {}
+        Config { interchange: InterchangeType::Json }
     }
 }

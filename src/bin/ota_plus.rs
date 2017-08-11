@@ -331,25 +331,23 @@ fn cmd_targets_target_add(
 ) -> Result<()> {
     let cache = get_cache(path)?;
     let mut hashes = HashMap::new();
-    match sha256 {
-        Some(s) => {
-            let _ = hashes.insert(HashAlgorithm::Sha256, HashValue::new(encoding.decode(s)?));
-        }
-        None => (),
+
+    if let Some(s) = sha256 {
+        let _ = hashes.insert(HashAlgorithm::Sha256, HashValue::new(encoding.decode(s)?));
     };
-    match sha512 {
-        Some(s) => {
-            let _ = hashes.insert(HashAlgorithm::Sha512, HashValue::new(encoding.decode(s)?));
-        }
-        None => (),
+
+    if let Some(s) = sha512 {
+        let _ = hashes.insert(HashAlgorithm::Sha512, HashValue::new(encoding.decode(s)?));
     };
 
     let description = TargetDescription::new(length, hashes)?;
     let mut targets = cache.load_targets()?;
+
     if targets.targets().contains_key(&target) && !force {
         bail!(ErrorKind::Runtime("Target already exists".into()))
     }
     targets.add_target(target, description);
+    cache.unsigned_targets(&targets, true)?;
     Ok(())
 }
 
@@ -357,6 +355,7 @@ fn cmd_targets_target_remove(path: PathBuf, target: &TargetPath) -> Result<()> {
     let cache = get_cache(path)?;
     let mut targets = cache.load_targets()?;
     targets.remove_target(target);
+    cache.unsigned_targets(&targets, true)?;
     Ok(())
 }
 

@@ -10,7 +10,9 @@ use chrono::prelude::*;
 use clap::{App, ArgMatches, AppSettings, SubCommand, Arg};
 use data_encoding::{BASE64, HEXLOWER};
 use ota_plus::cache::Cache;
+use ota_plus::config::{Config, AppConfig, AuthConfig};
 use ota_plus::crypto::{KeyType, KeyPair, HashAlgorithm, HashValue};
+use ota_plus::interchange::InterchangeType;
 use ota_plus::tuf::{TargetsMetadata, TargetPath, TargetDescription};
 use std::collections::HashMap;
 use std::env;
@@ -235,7 +237,7 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                         .help("Create the `targets` metadata even it already exists")
                         .short("f")
                         .long("force"),
-                )
+                ),
         )
         .subcommand(
             SubCommand::with_name("target")
@@ -310,14 +312,52 @@ fn cmd_keygen(typ: &KeyType) -> Result<()> {
 }
 
 fn cmd_init(path: PathBuf) -> Result<()> {
-    Cache::new(path, None).map(|_| ()).map_err(|e| e.into())
+    let mut client_id = String::new();
+    loop {
+        print!("Enter your client id: ");
+        io::stdin().read_line(&mut client_id)?;
+        println!("");
+
+        if let Some(_) = client_id.pop() {
+            if ! client_id.is_empty() {
+                break;
+            }
+        }
+    }
+
+    let mut client_secret = String::new();
+    loop {
+        print!("Enter your client secret: ");
+        io::stdin().read_line(&mut client_secret)?;
+        println!("");
+
+        if let Some(_) = client_secret.pop() {
+            if ! client_secret.is_empty() {
+                break;
+            }
+        }
+    }
+
+    let config = Config::new(
+        AppConfig::new(InterchangeType::Json),
+        AuthConfig::new(client_id, client_secret),
+    );
+
+    Cache::new(path, config).map(|_| ()).map_err(|e| e.into())
 }
 
-fn cmd_targets_init(path: PathBuf, version: u32, expires: DateTime<Utc>, force: bool) -> Result<()> {
+fn cmd_targets_init(
+    path: PathBuf,
+    version: u32,
+    expires: DateTime<Utc>,
+    force: bool,
+) -> Result<()> {
     let cache = get_cache(path)?;
     let targets = TargetsMetadata::new(version, expires, HashMap::new())
         .chain_err(|| "Couldn't create `targets` metadata")?;
-    cache.unsigned_targets(&targets, force).map_err(|e| e.into())
+    cache.unsigned_targets(&targets, force).map_err(
+        |e| e.into(),
+    )
 }
 
 fn cmd_targets_target_add(

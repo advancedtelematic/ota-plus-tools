@@ -15,7 +15,7 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn new<P>(path: P, config: Option<Config>) -> Result<Self>
+    pub fn new<P>(path: P, config: Config) -> Result<Self>
     where
         P: Into<PathBuf>,
     {
@@ -34,8 +34,6 @@ impl Cache {
                 .create(path.join(p))
                 .chain_err(|| format!("Failed to create dir `{:?}`", p))?;
         }
-
-        let config = config.unwrap_or_default();
 
         let mut file = File::create(path.join("config.toml")).chain_err(
             || "Failed to create `config.toml`",
@@ -75,7 +73,7 @@ impl Cache {
     }
 
     pub fn load_targets(&self) -> Result<TargetsMetadata> {
-        match &self.config.interchange {
+        match self.config.app().interchange() {
             &InterchangeType::Json => {
                 let file = File::open(self.path.join("metadata").join("unsigned").join(format!(
                     "targets.{}",
@@ -88,7 +86,7 @@ impl Cache {
 
     pub fn unsigned_targets(&self, targets: &TargetsMetadata, force: bool) -> Result<()> {
         let temp = self.tempfile()?;
-        match &self.config.interchange {
+        match self.config.app().interchange() {
             &InterchangeType::Json => {
                 Json::to_writer(&temp, &targets).chain_err(
                     || "Failed to write metadata to temp file",
@@ -98,12 +96,12 @@ impl Cache {
                     "targets.{}",
                     Json::extension()
                 ));
-                
+
                 (if force {
-                    temp.persist(path)
-                } else {
-                    temp.persist_noclobber(path) 
-                }).map(|_| ())
+                     temp.persist(path)
+                 } else {
+                     temp.persist_noclobber(path)
+                 }).map(|_| ())
                     .map_err(|e| {
                         let e: Error = e.into();
                         e

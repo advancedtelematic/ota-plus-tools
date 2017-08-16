@@ -26,15 +26,23 @@ impl Config {
 #[derive(Serialize, Deserialize)]
 pub struct AppConfig {
     interchange: InterchangeType,
+    uri: String,
 }
 
 impl AppConfig {
-    pub fn new(interchange: InterchangeType) -> Self {
-        AppConfig { interchange: interchange }
+    pub fn new(interchange: InterchangeType, uri: String) -> Self {
+        AppConfig {
+            interchange: interchange,
+            uri: uri,
+        }
     }
 
     pub fn interchange(&self) -> &InterchangeType {
         &self.interchange
+    }
+
+    pub fn uri(&self) -> &str {
+        &self.uri
     }
 }
 
@@ -42,13 +50,15 @@ impl AppConfig {
 pub struct AuthConfig {
     client_id: String,
     client_secret: String,
+    repo_id: String,
 }
 
 impl AuthConfig {
-    pub fn new(client_id: String, client_secret: String) -> Self {
+    pub fn new(client_id: String, client_secret: String, repo_id: String) -> Self {
         AuthConfig {
             client_id: client_id,
             client_secret: client_secret,
+            repo_id: repo_id,
         }
     }
 
@@ -58,5 +68,9 @@ impl AuthConfig {
 
     pub fn client_secret(&self) -> &str {
         &self.client_secret
+    }
+
+    pub fn repo_id(&self) -> &str {
+        &self.repo_id
     }
 }

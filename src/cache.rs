@@ -1,3 +1,4 @@
+use json;
 use std::fs::{DirBuilder, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -5,9 +6,9 @@ use tempfile::NamedTempFile;
 use toml;
 
 use config::Config;
-use error::{Result, ResultExt, Error};
+use error::{Result, ResultExt, Error, ErrorKind};
 use interchange::{DataInterchange, Json, InterchangeType};
-use tuf::TargetsMetadata;
+use tuf::{TargetsMetadata, SignedMetadata};
 
 pub struct Cache {
     path: PathBuf,
@@ -68,23 +69,15 @@ impl Cache {
         })
     }
 
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     fn tempfile(&self) -> Result<NamedTempFile> {
         NamedTempFile::new_in(&self.path.join("temp")).chain_err(|| "Failed to create temp file")
     }
 
-    pub fn load_targets(&self) -> Result<TargetsMetadata> {
-        match self.config.app().interchange() {
-            &InterchangeType::Json => {
-                let file = File::open(self.path.join("metadata").join("unsigned").join(format!(
-                    "targets.{}",
-                    Json::extension()
-                )))?;
-                Json::from_reader(file)
-            }
-        }
-    }
-
-    pub fn unsigned_targets(&self, targets: &TargetsMetadata, force: bool) -> Result<()> {
+    pub fn set_unsigned_targets(&self, targets: &TargetsMetadata, force: bool) -> Result<()> {
         let temp = self.tempfile()?;
         match self.config.app().interchange() {
             &InterchangeType::Json => {
@@ -108,6 +101,81 @@ impl Cache {
                     })
                     .chain_err(|| "Temp file persistence failure")
             }
+        }
+    }
+
+    pub fn unsigned_targets(&self) -> Result<TargetsMetadata> {
+        let mut file = File::open(self.path.join("metadata").join("unsigned").join(format!(
+            "targets.{}",
+            self.config.app().interchange().extension()
+        )))?;
+        match *self.config.app().interchange() {
+            InterchangeType::Json => Ok(json::from_reader(file)?)
+        }
+    }
+
+    pub fn set_signed_targets<I>(
+        &self,
+        signed: &SignedMetadata<I, TargetsMetadata>,
+        force: bool,
+    ) -> Result<()>
+    where
+        I: DataInterchange,
+    {
+
+        let temp = self.tempfile()?;
+
+        if &I::typ() != self.config.app().interchange() {
+            bail!(ErrorKind::IllegalArgument(format!(
+                "Cache interchange format {:?} did not match argument {:?}",
+                self.config.app().interchange(),
+                I::typ()
+            )))
+        }
+
+        match self.config.app().interchange() {
+            &InterchangeType::Json => {
+                Json::to_writer(&temp, &signed).chain_err(
+                    || "Failed to write metadata to temp file",
+                )?;
+
+                let path = self.path.join("metadata").join("signed").join(format!(
+                    "targets.{}",
+                    Json::extension()
+                ));
+
+                (if force {
+                     temp.persist(path)
+                 } else {
+                     temp.persist_noclobber(path)
+                 }).map(|_| ())
+                    .map_err(|e| {
+                        let e: Error = e.into();
+                        e
+                    })
+                    .chain_err(|| "Temp file persistence failure")
+            }
+        }
+    }
+
+    pub fn signed_targets<I>(&self) -> Result<SignedMetadata<I, TargetsMetadata>>
+    where
+        I: DataInterchange
+    {
+        if &I::typ() != self.config.app().interchange() {
+            bail!(ErrorKind::IllegalArgument(format!(
+                "Cache interchange format {:?} did not match argument {:?}",
+                self.config.app().interchange(),
+                I::typ()
+            )))
+        }
+
+        let mut file = File::open(self.path.join("metadata").join("signed").join(format!(
+            "targets.{}",
+            self.config.app().interchange().extension()
+        )))?;
+        match *self.config.app().interchange() {
+            InterchangeType::Json => Ok(json::from_reader(file)?)
         }
     }
 }

@@ -16,6 +16,14 @@ pub enum InterchangeType {
     Json,
 }
 
+impl InterchangeType {
+    pub fn extension(&self) -> &'static str {
+        match *self {
+            InterchangeType::Json => "json",
+        }
+    }
+}
+
 /// The format used for data interchange, serialization, and deserialization.
 pub trait DataInterchange: Debug + PartialEq + Clone {
     /// The type of data that is contained in the `signed` portion of metadata.

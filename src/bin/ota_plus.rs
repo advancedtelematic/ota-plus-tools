@@ -3,27 +3,37 @@ extern crate clap;
 extern crate data_encoding;
 #[macro_use]
 extern crate error_chain;
+extern crate futures;
+extern crate hyper;
 extern crate ota_plus;
+extern crate serde_json as json;
+extern crate tokio_core;
 
 use chrono::offset::Utc;
 use chrono::prelude::*;
 use clap::{App, ArgMatches, AppSettings, SubCommand, Arg};
 use data_encoding::{BASE64, HEXLOWER};
+use futures::future::Future;
+use hyper::{Client, Method, Uri, Request, StatusCode};
 use ota_plus::cache::Cache;
 use ota_plus::config::{Config, AppConfig, AuthConfig};
 use ota_plus::crypto::{KeyType, KeyPair, HashAlgorithm, HashValue};
-use ota_plus::interchange::InterchangeType;
+use ota_plus::interchange::{InterchangeType, Json};
 use ota_plus::tuf::{TargetsMetadata, TargetPath, TargetDescription};
 use std::collections::HashMap;
 use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
+use tokio_core::reactor::Core;
 
 error_chain! {
     foreign_links {
         Io(io::Error);
+        Json(json::Error);
         DataEncodingDecode(data_encoding::DecodeError);
+        Hyper(hyper::Error);
+        HyperUri(hyper::error::UriError);
     }
 
     links {
@@ -54,18 +64,18 @@ fn main() {
 }
 
 fn run_main(matches: ArgMatches) -> Result<()> {
-    let path: Result<_> = matches
-        .value_of("path")
+    let home: Result<_> = matches
+        .value_of("home")
         .map(PathBuf::from)
         .or_else(|| env::home_dir().map(|p| p.join(".ota-plus")))
         .ok_or_else(|| {
             ErrorKind::IllegalArgument("Missing `path`.".into()).into()
         });
     // this looks dumb, but the compiler requires it
-    let path = path?;
+    let home = home?;
 
     if let Some(_) = matches.subcommand_matches("init") {
-        cmd_init(path)
+        cmd_init(home)
     } else if let Some(matches) = matches.subcommand_matches("keygen") {
         let typ = matches.value_of("type").unwrap();
         let typ = KeyType::from_str(&typ)?;
@@ -77,7 +87,7 @@ fn run_main(matches: ArgMatches) -> Result<()> {
                 let expires = matches.value_of("expires").unwrap();
                 let expires = Utc.datetime_from_str(expires, "%FT%TZ").unwrap();
                 let force = matches.is_present("force");
-                cmd_targets_init(path, version, expires, force)
+                cmd_targets_init(home, version, expires, force)
             } else if let Some(matches) = matches.subcommand_matches("target") {
                 if let Some(matches) = matches.subcommand_matches("add") {
                     let target = TargetPath::new(matches.value_of("target").unwrap().into())
@@ -88,11 +98,15 @@ fn run_main(matches: ArgMatches) -> Result<()> {
                     let encoding = Encoding::from_str(&matches.value_of("encoding").unwrap())
                         .unwrap();
                     let force = matches.is_present("force");
-                    cmd_targets_target_add(path, target, force, length, sha256, sha512, encoding)
+                    cmd_targets_target_add(home, target, force, length, sha256, sha512, encoding)
                 } else if let Some(matches) = matches.subcommand_matches("remove") {
                     let target = TargetPath::new(matches.value_of("target").unwrap().into())
                         .unwrap();
-                    cmd_targets_target_remove(path, &target)
+                    cmd_targets_target_remove(home, &target)
+                } else if let Some(_) = matches.subcommand_matches("push") {
+                    cmd_targets_push(home)
+                } else if let Some(_) = matches.subcommand_matches("sign") {
+                    cmd_targets_sign(home)
                 } else {
                     unreachable!()
                 }
@@ -171,12 +185,12 @@ fn parser<'a, 'b>() -> App<'a, 'b> {
         .about("CLI tool for interacting with OTA+")
         .settings(&[AppSettings::SubcommandRequiredElseHelp])
         .arg(
-            Arg::with_name("path")
+            Arg::with_name("home")
                 .help(
                     "The path to the settings and local cache. Defaults to `~/.ota-plus`.",
                 )
-                .short("p")
-                .long("path")
+                .short("H")
+                .long("home")
                 .takes_value(true)
                 .global(true),
         )
@@ -297,6 +311,12 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                         ),
                 ),
         )
+        .subcommand(SubCommand::with_name("push").about(
+            "Push the signed metadata to the remote repo",
+        ))
+        .subcommand(SubCommand::with_name("sign").about(
+            "Signed the metadata",
+        ))
 
 }
 
@@ -319,7 +339,7 @@ fn cmd_init(path: PathBuf) -> Result<()> {
         println!("");
 
         if let Some(_) = client_id.pop() {
-            if ! client_id.is_empty() {
+            if !client_id.is_empty() {
                 break;
             }
         }
@@ -332,15 +352,28 @@ fn cmd_init(path: PathBuf) -> Result<()> {
         println!("");
 
         if let Some(_) = client_secret.pop() {
-            if ! client_secret.is_empty() {
+            if !client_secret.is_empty() {
+                break;
+            }
+        }
+    }
+
+    let mut repo_id = String::new();
+    loop {
+        print!("Enter your repo ID: ");
+        io::stdin().read_line(&mut repo_id)?;
+        println!("");
+
+        if let Some(_) = repo_id.pop() {
+            if !repo_id.is_empty() {
                 break;
             }
         }
     }
 
     let config = Config::new(
-        AppConfig::new(InterchangeType::Json),
-        AuthConfig::new(client_id, client_secret),
+        AppConfig::new(InterchangeType::Json, "https://atsgarage.com".into()),
+        AuthConfig::new(client_id, client_secret, repo_id),
     );
 
     Cache::new(path, config).map(|_| ()).map_err(|e| e.into())
@@ -355,7 +388,7 @@ fn cmd_targets_init(
     let cache = get_cache(path)?;
     let targets = TargetsMetadata::new(version, expires, HashMap::new())
         .chain_err(|| "Couldn't create `targets` metadata")?;
-    cache.unsigned_targets(&targets, force).map_err(
+    cache.set_unsigned_targets(&targets, force).map_err(
         |e| e.into(),
     )
 }
@@ -387,7 +420,7 @@ fn cmd_targets_target_add(
         bail!(ErrorKind::Runtime("Target already exists".into()))
     }
     targets.add_target(target, description);
-    cache.unsigned_targets(&targets, true)?;
+    cache.set_unsigned_targets(&targets, true)?;
     Ok(())
 }
 
@@ -395,8 +428,33 @@ fn cmd_targets_target_remove(path: PathBuf, target: &TargetPath) -> Result<()> {
     let cache = get_cache(path)?;
     let mut targets = cache.load_targets()?;
     targets.remove_target(target);
-    cache.unsigned_targets(&targets, true)?;
+    cache.set_unsigned_targets(&targets, true)?;
     Ok(())
+}
+
+fn cmd_targets_push(path: PathBuf) -> Result<()> {
+    let cache = get_cache(path)?;
+    let core = Core::new()?;
+    let client = Client::new(&core.handle());
+
+    let uri = Uri::from_str(&format!("{}/repo/{}/targets", cache.config().app().uri(), cache.config().auth().repo_id()))?;
+
+    let mut request = Request::new(Method::Put, uri);
+    // TODO this defaults to JSON
+    request.set_body(json::to_string(&cache.signed_targets::<Json>()?)?);
+
+    let resp = client.request(request).wait()?;
+    if resp.status() != StatusCode::Ok {
+        bail!(ErrorKind::Runtime(
+            format!("Bad status code: {:?}", resp.status()),
+        ));
+    }
+    Ok(())
+}
+
+fn cmd_targets_sign(path: PathBuf) -> Result<()> {
+    let cache = get_cache(path)?;
+    panic!() // TODO
 }
 
 #[cfg(test)]

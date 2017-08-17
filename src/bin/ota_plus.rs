@@ -79,7 +79,8 @@ fn run_main(matches: ArgMatches) -> Result<()> {
     } else if let Some(matches) = matches.subcommand_matches("keygen") {
         let typ = matches.value_of("type").unwrap();
         let typ = KeyType::from_str(&typ)?;
-        cmd_keygen(&typ)
+        let name = matches.value_of("name").unwrap();
+        cmd_keygen(home, &typ, name)
     } else if let Some(matches) = matches.subcommand_matches("tuf") {
         if let Some(matches) = matches.subcommand_matches("targets") {
             if let Some(matches) = matches.subcommand_matches("init") {
@@ -210,9 +211,17 @@ fn subcmd_keygen<'a, 'b>() -> App<'a, 'b> {
         )
         .arg(
             Arg::with_name("type")
+                .short("t")
+                .long("type")
                 .takes_value(true)
                 .default_value("ed25519")
                 .possible_values(&["ed25519"]),
+        )
+        .arg(
+            Arg::with_name("name")
+                .takes_value(true)
+                .required(true)
+                .possible_values(&["root", "targets", "timestamp", "snapshot"]),
         )
 }
 
@@ -324,11 +333,11 @@ fn get_cache(path: PathBuf) -> Result<Cache> {
     Cache::try_from(path).chain_err(|| "Could not initialize the cache")
 }
 
-fn cmd_keygen(typ: &KeyType) -> Result<()> {
-    match KeyPair::new_key_bytes(typ) {
-        Ok(bs) => io::stdout().write(&bs).map(|_| ()).map_err(|e| e.into()),
-        Err(e) => Err(e.into()),
-    }
+fn cmd_keygen(path: PathBuf, typ: &KeyType, name: &str) -> Result<()> {
+    let cache = get_cache(path)?;
+    let key = KeyPair::new(typ)?;
+    cache.add_key(&key, name)?;
+    Ok(())
 }
 
 fn cmd_init(path: PathBuf) -> Result<()> {
@@ -414,7 +423,7 @@ fn cmd_targets_target_add(
     };
 
     let description = TargetDescription::new(length, hashes)?;
-    let mut targets = cache.load_targets()?;
+    let mut targets = cache.unsigned_targets()?;
 
     if targets.targets().contains_key(&target) && !force {
         bail!(ErrorKind::Runtime("Target already exists".into()))
@@ -426,7 +435,7 @@ fn cmd_targets_target_add(
 
 fn cmd_targets_target_remove(path: PathBuf, target: &TargetPath) -> Result<()> {
     let cache = get_cache(path)?;
-    let mut targets = cache.load_targets()?;
+    let mut targets = cache.unsigned_targets()?;
     targets.remove_target(target);
     cache.set_unsigned_targets(&targets, true)?;
     Ok(())

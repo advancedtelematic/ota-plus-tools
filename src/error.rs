@@ -1,5 +1,6 @@
 use chrono;
 use data_encoding;
+use derp;
 use json;
 use std::io;
 use tempfile;
@@ -9,6 +10,7 @@ error_chain! {
     foreign_links {
         ChronoParse(chrono::ParseError);
         DataEncoding(data_encoding::DecodeError);
+        Der(derp::Error);
         Io(io::Error);
         Json(json::Error);
         TempfilePersist(tempfile::PersistError);
@@ -28,6 +30,10 @@ error_chain! {
         IllegalArgument(s: String) {
             description("An illegal argument was supplied")
             display("Illegal argument: {}", s)
+        }
+        Runtime(s: String) {
+            description("A runtime error occurred")
+            display("{}", s)
         }
     }
 }

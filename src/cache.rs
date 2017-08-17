@@ -6,6 +6,7 @@ use tempfile::NamedTempFile;
 use toml;
 
 use config::Config;
+use crypto::KeyPair;
 use error::{Result, ResultExt, Error, ErrorKind};
 use interchange::{DataInterchange, Json, InterchangeType};
 use tuf::{TargetsMetadata, SignedMetadata};
@@ -177,5 +178,20 @@ impl Cache {
         match *self.config.app().interchange() {
             InterchangeType::Json => Ok(json::from_reader(file)?)
         }
+    }
+
+    pub fn add_key(&self, key: &KeyPair, name: &str) -> Result<()> {
+        let path = self.path.join("keys").join(name);
+
+        if path.exists() {
+            bail!(ErrorKind::Runtime(format!("Key already exists: {}", name)))
+        }
+
+        let mut file = File::create(&path).chain_err(|| {
+            format!("Could not create path {:?}", path)
+        })?;
+        file.write_all(key.priv_key())?;
+
+        Ok(())
     }
 }

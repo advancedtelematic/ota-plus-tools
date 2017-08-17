@@ -54,11 +54,11 @@ pub struct AuthConfig {
 }
 
 impl AuthConfig {
-    pub fn new(client_id: String, client_secret: String, repo_id: String) -> Self {
+    pub fn new(client_id: &str, client_secret: &str, repo_id: &str) -> Self {
         AuthConfig {
-            client_id: client_id,
-            client_secret: client_secret,
-            repo_id: repo_id,
+            client_id: client_id.into(),
+            client_secret: client_secret.into(),
+            repo_id: repo_id.into(),
         }
     }
 

@@ -74,8 +74,11 @@ fn run_main(matches: ArgMatches) -> Result<()> {
     // this looks dumb, but the compiler requires it
     let home = home?;
 
-    if let Some(_) = matches.subcommand_matches("init") {
-        cmd_init(home)
+    if let Some(matchtes) = matches.subcommand_matches("init") {
+        let client_id = matches.value_of("client_id").unwrap();
+        let client_secret = matches.value_of("client_secret").unwrap();
+        let repo_id = matches.value_of("repo_id").unwrap();
+        cmd_init(home, client_id, client_secret, repo_id)
     } else if let Some(matches) = matches.subcommand_matches("keygen") {
         let typ = matches.value_of("type").unwrap();
         let typ = KeyType::from_str(&typ)?;
@@ -201,7 +204,26 @@ fn parser<'a, 'b>() -> App<'a, 'b> {
 }
 
 fn subcmd_init<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("init").about("Initialize the local cache")
+    SubCommand::with_name("init")
+        .about("Initialize the local cache")
+        .arg(
+            Arg::with_name("client_id")
+                .long("client-id")
+                .takes_value(true)
+                .required(true)
+        )
+        .arg(
+            Arg::with_name("client_secret")
+                .long("client-id")
+                .takes_value(true)
+                .required(true)
+        )
+        .arg(
+            Arg::with_name("repo_id")
+                .long("repo-id")
+                .takes_value(true)
+                .required(true)
+        )
 }
 
 fn subcmd_keygen<'a, 'b>() -> App<'a, 'b> {
@@ -340,46 +362,7 @@ fn cmd_keygen(path: PathBuf, typ: &KeyType, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_init(path: PathBuf) -> Result<()> {
-    let mut client_id = String::new();
-    loop {
-        print!("Enter your client id: ");
-        io::stdin().read_line(&mut client_id)?;
-        println!("");
-
-        if let Some(_) = client_id.pop() {
-            if !client_id.is_empty() {
-                break;
-            }
-        }
-    }
-
-    let mut client_secret = String::new();
-    loop {
-        print!("Enter your client secret: ");
-        io::stdin().read_line(&mut client_secret)?;
-        println!("");
-
-        if let Some(_) = client_secret.pop() {
-            if !client_secret.is_empty() {
-                break;
-            }
-        }
-    }
-
-    let mut repo_id = String::new();
-    loop {
-        print!("Enter your repo ID: ");
-        io::stdin().read_line(&mut repo_id)?;
-        println!("");
-
-        if let Some(_) = repo_id.pop() {
-            if !repo_id.is_empty() {
-                break;
-            }
-        }
-    }
-
+fn cmd_init(path: PathBuf, client_id: &str, client_secret: &str, repo_id: &str) -> Result<()> {
     let config = Config::new(
         AppConfig::new(InterchangeType::Json, "https://atsgarage.com".into()),
         AuthConfig::new(client_id, client_secret, repo_id),

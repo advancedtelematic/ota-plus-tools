@@ -823,6 +823,7 @@ mod test {
             let key = KeyPair::new(&KeyType::Ed25519).unwrap();
             let pub_key = match &key.inner {
                 &KeyPairInner::Ed25519(ref ed) => ed.public_key_bytes(),
+                _ => panic!(),
             };
             wrap_ed25519_public_point(pub_key).unwrap();
         }

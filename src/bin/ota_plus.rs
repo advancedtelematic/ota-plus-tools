@@ -215,7 +215,7 @@ fn subcmd_keygen<'a, 'b>() -> App<'a, 'b> {
                 .long("type")
                 .takes_value(true)
                 .default_value("ed25519")
-                .possible_values(&["ed25519"]),
+                .possible_values(&["ed25519", "rsa"]),
         )
         .arg(
             Arg::with_name("name")

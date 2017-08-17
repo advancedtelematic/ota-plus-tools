@@ -106,7 +106,7 @@ impl Cache {
     }
 
     pub fn unsigned_targets(&self) -> Result<TargetsMetadata> {
-        let mut file = File::open(self.path.join("metadata").join("unsigned").join(format!(
+        let file = File::open(self.path.join("metadata").join("unsigned").join(format!(
             "targets.{}",
             self.config.app().interchange().extension()
         )))?;
@@ -171,7 +171,7 @@ impl Cache {
             )))
         }
 
-        let mut file = File::open(self.path.join("metadata").join("signed").join(format!(
+        let file = File::open(self.path.join("metadata").join("signed").join(format!(
             "targets.{}",
             self.config.app().interchange().extension()
         )))?;

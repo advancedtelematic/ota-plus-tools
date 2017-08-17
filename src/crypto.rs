@@ -1,19 +1,24 @@
 use curve25519_dalek::curve::{CompressedEdwardsY, ExtendedPoint};
 use data_encoding::BASE64;
-use derp::Der;
+use derp::{self, Der, Tag};
 use ring::digest::{self, SHA256, SHA512};
 use ring::rand::SystemRandom;
-use ring::signature::Ed25519KeyPair;
+use ring::signature::{Ed25519KeyPair, RSAKeyPair, RSASigningState, RSA_PSS_SHA256};
 use serde::de::{Deserialize, Deserializer, Error as DeserializeError};
 use serde::ser::{Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::ops::Deref;
+use std::process::{Command, Stdio};
 use std::str::FromStr;
+use std::sync::Arc;
 use untrusted;
 
 use error::{Error, ErrorKind, Result};
+
+/// 1.2.840.113549.1.1.1 rsaEncryption(PKCS #1)
+const RSA_SPKI_OID: &'static [u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
 
 /// 1.2.840.10045.2.1 ecPublicKey (ANSI X9.62 public key type)
 const EC_PUBLIC_KEY_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
@@ -357,12 +362,14 @@ fn expand_pub_key(pub_key: &[u8; 32]) -> Result<[u8; 65]> {
 
 pub enum KeyType {
     Ed25519,
+    Rsa,
 }
 
 impl ToString for KeyType {
     fn to_string(&self) -> String {
         match *self {
             KeyType::Ed25519 => "ed25519".into(),
+            KeyType::Rsa => "rsa".into(),
         }
     }
 }
@@ -373,6 +380,7 @@ impl FromStr for KeyType {
     fn from_str(s: &str) -> Result<Self> {
         match s {
             "ed25519" => Ok(KeyType::Ed25519),
+            "rsa" => Ok(KeyType::Rsa),
             _ => {
                 bail!(ErrorKind::IllegalArgument(
                     format!("Unknown key type: {}", s),
@@ -384,6 +392,7 @@ impl FromStr for KeyType {
 
 enum KeyPairInner {
     Ed25519(Ed25519KeyPair),
+    Rsa(Arc<RSAKeyPair>),
 }
 
 pub struct KeyPair {
@@ -417,6 +426,10 @@ impl KeyPair {
                     priv_key: PrivKeyValue(pkcs8_bytes),
                 })
             }
+            KeyType::Rsa => {
+                let bytes = rsa_gen(4096)?;
+                Self::rsa_from_bytes(&bytes)
+            }
         }
     }
 
@@ -427,9 +440,107 @@ impl KeyPair {
     pub fn priv_key(&self) -> &PrivKeyValue {
         &self.priv_key
     }
+
     pub fn key_id(&self) -> &KeyId {
         &self.key_id
+    }    
+    
+    fn rsa_from_bytes(bytes: &[u8]) -> Result<Self> {
+        let key = RSAKeyPair::from_pkcs8(untrusted::Input::from(bytes)).map_err(|_| {
+            ErrorKind::Crypto("Could not parse key as PKCS#8v2".into())
+        })?;
+
+        if key.public_modulus_len() < 256 {
+            bail!(ErrorKind::IllegalArgument(format!(
+                "RSA public modulus must be 2048 or greater. Found {}",
+                key.public_modulus_len() * 8
+            )));
+        }
+
+        let pub_key = extract_rsa_pub_from_pkcs8(bytes)?;
+        let key_id = calculate_key_id(&write_rsa_spki(&pub_key)?);
+        let private = KeyPairInner::Rsa(Arc::new(key));
+
+        Ok(KeyPair {
+            inner: private,
+            key_id: key_id,
+            priv_key: PrivKeyValue(bytes.into()),
+            pub_key: PubKeyValue(pub_key),
+        })
     }
+
+    pub fn sign(&self, msg: &[u8]) -> Result<Signature> {
+        let (value, scheme) = match &self.inner {
+            &KeyPairInner::Ed25519(ref ed) => {
+                (SignatureValue(ed.sign(msg).as_ref().into()), SignatureScheme::Ed25519)
+            },
+            &KeyPairInner::Rsa(ref rsa) => {
+                let mut signing_state = RSASigningState::new(rsa.clone()).map_err(|_| {
+                    ErrorKind::Crypto("Could not initialize RSA signing state.".into())
+                })?;
+                let rng = SystemRandom::new();
+                let mut buf = vec![0; signing_state.key_pair().public_modulus_len()];
+                signing_state
+                    .sign(&RSA_PSS_SHA256, &rng, msg, &mut buf)
+                    .map_err(|_| ErrorKind::Crypto("Failed to sign message.".into()))?;
+                (SignatureValue(buf), SignatureScheme::RsaSsaPssSha256)
+            }
+        };
+
+        Ok(Signature {
+            key_id: self.key_id.clone(),
+            value: value,
+            scheme: scheme,
+        })
+    }
+}
+
+fn rsa_gen(size: u32) -> Result<Vec<u8>> {
+    let gen = Command::new("openssl")
+        .args(
+            &[
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                &format!("rsa_keygen_bits:{}", size),
+                "-pkeyopt",
+                "rsa_keygen_pubexp:65537",
+                "-outform",
+                "der",
+            ],
+        )
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    let mut pk8 = Command::new("openssl")
+        .args(
+            &[
+                "pkcs8",
+                "-inform",
+                "der",
+                "-topk8",
+                "-nocrypt",
+                "-outform",
+                "der",
+            ],
+        )
+        .stdin(Stdio::piped())
+        .spawn()?;
+
+    match pk8.stdin {
+        Some(ref mut stdin) => {
+            for byte in gen.stdout.ok_or_else(|| ErrorKind::Runtime("Failed to get stdout handle".into()))?.bytes() {
+                stdin
+                    .write(&[byte.map_err(|e| format!("Couldn't read byte: {:?}", e))?])
+                    .map_err(|e| format!("Failed to write to stdin: {:?}", e))?;
+            }
+        }
+        None => bail!(ErrorKind::Runtime("Failed to get stdin".into())),
+    };
+
+    let out = pk8.wait_with_output()?;
+    Ok(out.stdout)
 }
 
 /// Wrapper type for public key bytes.
@@ -493,7 +604,7 @@ pub enum SignatureScheme {
 }
 
 /// Wrapper for a key's ID.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct KeyId(Vec<u8>);
 
 impl KeyId {
@@ -534,11 +645,14 @@ impl<'de> Deserialize<'de> for KeyId {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Signature {
     key_id: KeyId,
+    #[serde(rename = "method")]
     scheme: SignatureScheme,
     value: SignatureValue,
 }
 
 impl Signature {
+    
+
     /// An immutable reference to the `KeyId` of the key that produced the signature.
     pub fn key_id(&self) -> &KeyId {
         &self.key_id
@@ -633,6 +747,70 @@ impl Deref for PubKeyValue {
         &self.0
     }
 }
+
+
+fn extract_rsa_pub_from_pkcs8(der_key: &[u8]) -> Result<Vec<u8>> {
+    let input = untrusted::Input::from(der_key);
+    Ok(input.read_all(derp::Error::Read, |input| {
+        derp::nested(input, Tag::Sequence, |input| {
+            if derp::small_nonnegative_integer(input)? != 0 {
+                return Err(derp::Error::WrongValue);
+            }
+
+            derp::nested(input, Tag::Sequence, |input| {
+                let actual_alg_id = derp::expect_tag_and_get_value(input, Tag::Oid)?;
+                if actual_alg_id.as_slice_less_safe() != RSA_SPKI_OID {
+                    return Err(derp::Error::WrongValue);
+                }
+                let _ = derp::expect_tag_and_get_value(input, Tag::Null)?;
+                Ok(())
+            })?;
+
+            derp::nested(input, Tag::OctetString, |input| {
+                derp::nested(input, Tag::Sequence, |input| {
+                    if derp::small_nonnegative_integer(input)? != 0 {
+                        return Err(derp::Error::WrongValue);
+                    }
+
+                    let n = derp::positive_integer(input)?;
+                    let e = derp::positive_integer(input)?;
+                    let _ = input.skip_to_end();
+                    write_pkcs1(n.as_slice_less_safe(), e.as_slice_less_safe())
+                })
+            })
+        })
+    })?)
+}
+
+fn write_rsa_spki(public: &[u8]) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    {
+        let mut der = Der::new(&mut output);
+        der.sequence(|der| {
+            der.sequence(|der| {
+                der.element(Tag::Oid, RSA_SPKI_OID)?;
+                der.null()
+            })?;
+            der.bit_string(0, public)
+        })?;
+    }
+
+    Ok(output)
+}
+
+fn write_pkcs1(n: &[u8], e: &[u8]) -> ::std::result::Result<Vec<u8>, derp::Error> {
+    let mut output = Vec::new();
+    {
+        let mut der = Der::new(&mut output);
+        der.sequence(|der| {
+            der.positive_integer(n)?;
+            der.positive_integer(e)
+        })?;
+    }
+
+    Ok(output)
+}
+
 
 #[cfg(test)]
 mod test {

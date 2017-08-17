@@ -104,13 +104,13 @@ fn run_main(matches: ArgMatches) -> Result<()> {
                     let target = TargetPath::new(matches.value_of("target").unwrap().into())
                         .unwrap();
                     cmd_targets_target_remove(home, &target)
-                } else if let Some(_) = matches.subcommand_matches("push") {
-                    cmd_targets_push(home)
-                } else if let Some(_) = matches.subcommand_matches("sign") {
-                    cmd_targets_sign(home)
                 } else {
                     unreachable!()
                 }
+            } else if let Some(_) = matches.subcommand_matches("push") {
+                cmd_targets_push(home)
+            } else if let Some(_) = matches.subcommand_matches("sign") {
+                cmd_targets_sign(home)
             } else {
                 unreachable!()
             }
@@ -324,7 +324,7 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
             "Push the signed metadata to the remote repo",
         ))
         .subcommand(SubCommand::with_name("sign").about(
-            "Signed the metadata",
+            "Sign the metadata",
         ))
 
 }

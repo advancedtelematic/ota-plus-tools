@@ -304,7 +304,7 @@ fn wrap_ed25519_public_point(pub_point: &[u8]) -> Result<Vec<u8>> {
 
     let mut pub_point_array = [0; 32];
     for i in 0..32 {
-        pub_point_array[0] = pub_point[i];
+        pub_point_array[i] = pub_point[i];
     }
 
     let expanded = expand_pub_key(&pub_point_array)?;

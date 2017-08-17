@@ -214,7 +214,7 @@ fn subcmd_init<'a, 'b>() -> App<'a, 'b> {
         )
         .arg(
             Arg::with_name("client_secret")
-                .long("client-id")
+                .long("client-secret")
                 .takes_value(true)
                 .required(true)
         )

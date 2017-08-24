@@ -282,9 +282,10 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
             SubCommand::with_name("remove")
                 .about("Remove a target from the staged metadata")
                 .arg(
-                    Arg::with_name("target")
-                        .help("The target's name")
-                        .short("t")
+                    Arg::with_name("path")
+                        .help("The target filepath")
+                        .short("p")
+                        .long("path")
                         .required(true)
                         .takes_value(true)
                         .validator(is_target_path),
@@ -393,7 +394,7 @@ fn cmd_tuf_targets_add(root: PathBuf, matches: &ArgMatches) -> Result<()> {
 }
 
 fn cmd_tuf_targets_remove(root: PathBuf, matches: &ArgMatches) -> Result<()> {
-    let target = TargetPath::new(matches.value_of("target").unwrap().into()).unwrap();
+    let target = TargetPath::new(matches.value_of("path").unwrap().into()).unwrap();
     let cache = get_cache(root)?;
     let mut targets = cache.unsigned_targets()?;
     targets.remove_target(&target);

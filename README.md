@@ -40,7 +40,9 @@ ota-plus tuf targets init \
 5. Add new targets with:
 ```
 ota-plus tuf targets add \
-  --target ${TARGET_NAME} \
+  --path ${TARGET_PATH} \
+  --name ${TARGET_NAME} \
+  --version ${TARGET_VERSION} \
   --length ${TARGET_LENGTH} \
   --url ${TARGET_URL} \
   --sha256 ${TARGET_HASH}

@@ -307,6 +307,8 @@ impl<'de> Deserialize<'de> for TargetDescription {
 /// Custom metadata optionally attached to a `TargetDescription`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TargetCustom {
+    name: String,
+    version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     uri: Option<String>,
     #[serde(rename = "hardwareIds")]
@@ -316,7 +318,12 @@ pub struct TargetCustom {
 
 impl TargetCustom {
     /// Create a new `TargetCustom`.
-    pub fn new(uri: Option<String>, hardware_ids: Option<Vec<String>>) -> Self {
-        TargetCustom { uri, hardware_ids }
+    pub fn new(
+        name: String,
+        version: String,
+        uri: Option<String>,
+        hardware_ids: Option<Vec<String>>
+    ) -> Self {
+        TargetCustom { name, version, uri, hardware_ids }
     }
 }

@@ -206,19 +206,29 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
             SubCommand::with_name("add")
                 .about("Add a target to the staged metadata")
                 .arg(
-                    Arg::with_name("target")
-                        .help("The target's name")
-                        .short("t")
-                        .long("target")
+                    Arg::with_name("path")
+                        .help("The target filepath")
+                        .short("p")
+                        .long("path")
                         .required(true)
                         .takes_value(true)
                         .validator(is_target_path),
                 )
                 .arg(
-                    Arg::with_name("force")
-                        .help("Add the target even it already exists")
-                        .short("f")
-                        .long("force"),
+                    Arg::with_name("name")
+                        .help("The target name")
+                        .short("n")
+                        .long("name")
+                        .required(true)
+                        .takes_value(true)
+                )
+                .arg(
+                    Arg::with_name("version")
+                        .help("The target version")
+                        .short("v")
+                        .long("version")
+                        .required(true)
+                        .takes_value(true)
                 )
                 .arg(
                     Arg::with_name("length")
@@ -260,6 +270,12 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                         .long("hardware-id")
                         .takes_value(true)
                         .multiple(true)
+                )
+                .arg(
+                    Arg::with_name("force")
+                        .help("Add the target even it already exists")
+                        .short("f")
+                        .long("force"),
                 )
         )
         .subcommand(
@@ -343,7 +359,9 @@ fn cmd_tuf_targets_init(root: PathBuf, matches: &ArgMatches) -> Result<()> {
 }
 
 fn cmd_tuf_targets_add(root: PathBuf, matches: &ArgMatches) -> Result<()> {
-    let target = TargetPath::new(matches.value_of("target").unwrap().into()).unwrap();
+    let path = TargetPath::new(matches.value_of("path").unwrap().into()).unwrap();
+    let name = matches.value_of("name").unwrap();
+    let version = matches.value_of("version").unwrap();
     let length = matches.value_of("length").unwrap().parse::<u64>().unwrap();
     let encoding = Encoding::from_str(&matches.value_of("encoding").unwrap()).unwrap();
     let force = matches.is_present("force");
@@ -361,15 +379,15 @@ fn cmd_tuf_targets_add(root: PathBuf, matches: &ArgMatches) -> Result<()> {
         None => None,
         Some(vals) => Some(vals.map(String::from).collect::<Vec<_>>())
     };
-    let custom = TargetCustom::new(Some(url.into()), ids);
+    let custom = TargetCustom::new(name.into(), version.into(), Some(url.into()), ids);
 
     let cache = get_cache(root)?;
     let description = TargetDescription::new(length, hashes, Some(custom))?;
     let mut targets = cache.unsigned_targets()?;
-    if targets.targets().contains_key(&target) && !force {
+    if targets.targets().contains_key(&path) && !force {
         bail!(ErrorKind::Runtime("Target already exists".into()))
     }
-    targets.add_target(target, description);
+    targets.add_target(path, description);
     cache.set_unsigned_targets(&targets, true)?;
     Ok(())
 }

@@ -119,12 +119,6 @@ fn subcmd_init<'a, 'b>() -> App<'a, 'b> {
                 .required(true)
         )
         .arg(
-            Arg::with_name("repo_id")
-                .long("repo-id")
-                .takes_value(true)
-                .required(true)
-        )
-        .arg(
             Arg::with_name("tuf_url")
                 .long("tuf-url")
                 .takes_value(true)
@@ -306,12 +300,11 @@ fn is_target_path(s: String) -> ::std::result::Result<(), String> {
 fn cmd_init(root: PathBuf, matches: &ArgMatches) -> Result<()> {
     let client_id = matches.value_of("client_id").unwrap().parse().unwrap();
     let client_secret = matches.value_of("client_secret").unwrap();
-    let repo_id = matches.value_of("repo_id").unwrap();
     let tuf_url = matches.value_of("tuf_url").unwrap_or("https://app.atsgarage.com");
     let token_url = matches.value_of("token_url").unwrap_or("https://auth-plus.atsgarage.com");
 
     let app_conf = AppConfig::new(InterchangeType::Json, tuf_url.into());
-    let auth_conf = AuthConfig::new(client_id, client_secret.into(), repo_id.into(), token_url.into());
+    let auth_conf = AuthConfig::new(client_id, client_secret.into(), token_url.into());
     Cache::new(root, Config::new(app_conf, auth_conf)).map(|_| ())?;
     Ok(())
 }

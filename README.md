@@ -8,12 +8,11 @@ To see a list of all subcommands, run: `ota-plus help`
 
 ### Getting started
 
-1. Initialize a new ota-plus repository with:
+1. Initialize a local ota-plus cache with:
 ```
 ota-plus init \
   --client-id ${CLIENT_ID} \
   --client-secret ${CLIENT_SECRET} \
-  --repo-id ${REPO_ID} \
   --tuf-url ${TUF_URL} \
   --token-url ${TOKEN_URL}
 ```

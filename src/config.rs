@@ -46,13 +46,12 @@ impl AppConfig {
 pub struct AuthConfig {
     client_id: Uuid,
     client_secret: String,
-    repo_id: String,
     token_url: String,
 }
 
 impl AuthConfig {
-    pub fn new(client_id: Uuid, client_secret: String, repo_id: String, token_url: String) -> Self {
-        AuthConfig { client_id, client_secret, repo_id, token_url }
+    pub fn new(client_id: Uuid, client_secret: String, token_url: String) -> Self {
+        AuthConfig { client_id, client_secret, token_url }
     }
 
     pub fn client_id(&self) -> Uuid {
@@ -61,10 +60,6 @@ impl AuthConfig {
 
     pub fn client_secret(&self) -> &str {
         &self.client_secret
-    }
-
-    pub fn repo_id(&self) -> &str {
-        &self.repo_id
     }
 
     pub fn token_url(&self) -> &str {

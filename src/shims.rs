@@ -57,10 +57,11 @@ impl TargetsMetadata {
 pub struct TargetDescription {
     length: u64,
     hashes: HashMap<crypto::HashAlgorithm, crypto::HashValue>,
+    custom: Option<tuf::TargetCustom>,
 }
 
 impl TargetDescription {
     pub fn try_into(self) -> Result<tuf::TargetDescription> {
-        tuf::TargetDescription::new(self.length, self.hashes)
+        tuf::TargetDescription::new(self.length, self.hashes, self.custom)
     }
 }

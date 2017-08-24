@@ -314,6 +314,10 @@ pub struct TargetCustom {
     #[serde(rename = "hardwareIds")]
     #[serde(skip_serializing_if = "Option::is_none")]
     hardware_ids: Option<Vec<String>>,
+    #[serde(rename = "createdAt")]
+    created_at: DateTime<Utc>,
+    #[serde(rename = "updatedAt")]
+    updated_at: DateTime<Utc>,
 }
 
 impl TargetCustom {
@@ -324,6 +328,8 @@ impl TargetCustom {
         uri: Option<String>,
         hardware_ids: Option<Vec<String>>
     ) -> Self {
-        TargetCustom { name, version, uri, hardware_ids }
+        let created_at = Utc::now();
+        let updated_at = created_at.clone();
+        TargetCustom { name, version, uri, hardware_ids, created_at, updated_at }
     }
 }

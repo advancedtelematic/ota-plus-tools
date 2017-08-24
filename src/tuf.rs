@@ -7,7 +7,7 @@ use std::fmt::{self, Display, Debug};
 use std::io::Read;
 use std::marker::PhantomData;
 
-use crypto::{self, Signature, HashValue, HashAlgorithm};
+use crypto::{self, Signature, HashValue, HashAlgorithm, KeyPair};
 use error::{Result, ErrorKind};
 use interchange::DataInterchange;
 use shims;
@@ -44,17 +44,27 @@ pub trait Metadata: Debug + PartialEq + Serialize + DeserializeOwned {
 
 /// A piece of raw metadata with attached signatures.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SignedMetadata<D, M>
-where
-    D: DataInterchange,
-    M: Metadata,
-{
+pub struct SignedMetadata<D: DataInterchange, M: Metadata> {
     signatures: Vec<Signature>,
     signed: D::RawData,
     #[serde(skip_serializing, skip_deserializing)]
-    _interchage: PhantomData<D>,
+    _interchange: PhantomData<D>,
     #[serde(skip_serializing, skip_deserializing)]
     _metadata: PhantomData<M>,
+}
+
+impl<D: DataInterchange, M: Metadata> SignedMetadata<D, M> {
+    pub fn from(targets: &TargetsMetadata, key_pair: &KeyPair) -> Result<Self> {
+        let data = D::serialize(&targets)?;
+        let canonical = D::canonicalize(&data)?;
+        let sig = key_pair.sign(&canonical)?;
+        Ok(SignedMetadata {
+            signatures: vec![sig],
+            signed: data,
+            _interchange: PhantomData,
+            _metadata: PhantomData
+        })
+    }
 }
 
 /// Metadata for the targets role.
@@ -73,17 +83,10 @@ impl TargetsMetadata {
         targets: HashMap<TargetPath, TargetDescription>,
     ) -> Result<Self> {
         if version < 1 {
-            bail!(ErrorKind::IllegalArgument(format!(
-                "Metadata version must be greater than zero. Found: {}",
-                version
-            )));
+            let msg = format!("Metadata version must be greater than zero. Found: {}", version);
+            bail!(ErrorKind::IllegalArgument(msg));
         }
-
-        Ok(TargetsMetadata {
-            version: version,
-            expires: expires,
-            targets: targets,
-        })
+        Ok(TargetsMetadata { version, expires, targets })
     }
 
     /// The version number.
@@ -117,10 +120,7 @@ impl Metadata for TargetsMetadata {
 }
 
 impl Serialize for TargetsMetadata {
-    fn serialize<S>(&self, ser: S) -> ::std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
+    fn serialize<S: Serializer>(&self, ser: S) -> ::std::result::Result<S::Ok, S::Error> {
         shims::TargetsMetadata::from(self)
             .map_err(|e| SerializeError::custom(format!("{:?}", e)))?
             .serialize(ser)
@@ -128,14 +128,9 @@ impl Serialize for TargetsMetadata {
 }
 
 impl<'de> Deserialize<'de> for TargetsMetadata {
-    fn deserialize<D>(de: D) -> ::std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
         let intermediate: shims::TargetsMetadata = Deserialize::deserialize(de)?;
-        intermediate.try_into().map_err(|e| {
-            DeserializeError::custom(format!("{:?}", e))
-        })
+        intermediate.try_into().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
     }
 }
 
@@ -197,21 +192,14 @@ impl TargetPath {
     pub fn matches_chain(&self, parents: &[HashSet<TargetPath>]) -> bool {
         if parents.is_empty() {
             return false;
-        }
-        if parents.len() == 1 {
+        } else if parents.len() == 1 {
             return parents[0].iter().any(|p| p == self || self.is_child(p));
         }
 
-        let new = parents[1..]
-            .iter()
+        let new = parents[1..].iter()
             .map(|group| {
-                group
-                    .iter()
-                    .filter(|parent| {
-                        parents[0].iter().any(
-                            |p| parent.is_child(p) || parent == &p,
-                        )
-                    })
+                group.iter()
+                    .filter(|parent| parents[0].iter().any(|p| parent.is_child(p) || parent == &p))
                     .cloned()
                     .collect::<HashSet<_>>()
             })
@@ -238,6 +226,8 @@ impl<'de> Deserialize<'de> for TargetPath {
 pub struct TargetDescription {
     length: u64,
     hashes: HashMap<HashAlgorithm, HashValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    custom: Option<TargetCustom>,
 }
 
 impl TargetDescription {
@@ -245,17 +235,16 @@ impl TargetDescription {
     ///
     /// Note: Creating this manually could lead to errors, and the `from_reader` method is
     /// preferred.
-    pub fn new(length: u64, hashes: HashMap<HashAlgorithm, HashValue>) -> Result<Self> {
+    pub fn new(
+        length: u64,
+        hashes: HashMap<HashAlgorithm, HashValue>,
+        custom: Option<TargetCustom>
+    ) -> Result<Self> {
         if hashes.is_empty() {
-            bail!(ErrorKind::IllegalArgument(
-                "Cannot have empty set of hashes".into(),
-            ));
+            bail!(ErrorKind::IllegalArgument("Cannot have empty set of hashes".into()));
         }
 
-        Ok(TargetDescription {
-            length: length,
-            hashes: hashes,
-        })
+        Ok(TargetDescription { length, hashes, custom })
     }
 
     /// Read the from the given reader and calculate the length and hash values.
@@ -274,7 +263,7 @@ impl TargetDescription {
     ///     let sha256 = HashValue::new(BASE64.decode(s.as_bytes()).unwrap());
     ///
     ///     let target_description =
-    ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha256]).unwrap();
+    ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha256], None).unwrap();
     ///     assert_eq!(target_description.length(), bytes.len() as u64);
     ///     assert_eq!(target_description.hashes().get(&HashAlgorithm::Sha256), Some(&sha256));
     ///
@@ -283,20 +272,18 @@ impl TargetDescription {
     ///     let sha512 = HashValue::new(BASE64.decode(s.as_bytes()).unwrap());
     ///
     ///     let target_description =
-    ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha512]).unwrap();
+    ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha512], None).unwrap();
     ///     assert_eq!(target_description.length(), bytes.len() as u64);
     ///     assert_eq!(target_description.hashes().get(&HashAlgorithm::Sha512), Some(&sha512));
     /// }
     /// ```
-    pub fn from_reader<R>(read: R, hash_algs: &[HashAlgorithm]) -> Result<Self>
-    where
-        R: Read,
-    {
+    pub fn from_reader<R: Read>(
+        read: R,
+        hash_algs: &[HashAlgorithm],
+        custom: Option<TargetCustom>
+    ) -> Result<Self> {
         let (length, hashes) = crypto::calculate_hashes(read, hash_algs)?;
-        Ok(TargetDescription {
-            length: length,
-            hashes: hashes,
-        })
+        Ok(TargetDescription { length, hashes, custom })
     }
 
     /// The maximum length of the target.
@@ -311,13 +298,38 @@ impl TargetDescription {
 }
 
 impl<'de> Deserialize<'de> for TargetDescription {
-    fn deserialize<D>(de: D) -> ::std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
         let intermediate: shims::TargetDescription = Deserialize::deserialize(de)?;
-        intermediate.try_into().map_err(|e| {
-            DeserializeError::custom(format!("{:?}", e))
-        })
+        intermediate.try_into().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
+    }
+}
+
+/// Custom metadata optionally attached to a `TargetDescription`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TargetCustom {
+    name: String,
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uri: Option<String>,
+    #[serde(rename = "hardwareIds")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hardware_ids: Option<Vec<String>>,
+    #[serde(rename = "createdAt")]
+    created_at: DateTime<Utc>,
+    #[serde(rename = "updatedAt")]
+    updated_at: DateTime<Utc>,
+}
+
+impl TargetCustom {
+    /// Create a new `TargetCustom`.
+    pub fn new(
+        name: String,
+        version: String,
+        uri: Option<String>,
+        hardware_ids: Option<Vec<String>>
+    ) -> Self {
+        let created_at = Utc::now();
+        let updated_at = created_at.clone();
+        TargetCustom { name, version, uri, hardware_ids, created_at, updated_at }
     }
 }

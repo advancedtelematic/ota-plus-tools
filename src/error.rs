@@ -2,7 +2,8 @@ use chrono;
 use data_encoding;
 use derp;
 use json;
-use std::io;
+use reqwest;
+use std;
 use tempfile;
 use toml;
 
@@ -11,11 +12,13 @@ error_chain! {
         ChronoParse(chrono::ParseError);
         DataEncoding(data_encoding::DecodeError);
         Der(derp::Error);
-        Io(io::Error);
+        Http(reqwest::Error);
+        Io(std::io::Error);
         Json(json::Error);
         TempfilePersist(tempfile::PersistError);
         TomlDeserialize(toml::de::Error);
         TomlSerialize(toml::ser::Error);
+        Utf8(std::string::FromUtf8Error);
     }
 
     errors {

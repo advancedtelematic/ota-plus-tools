@@ -1,19 +1,22 @@
+use data_encoding::HEXLOWER;
 use chrono::DateTime;
 use chrono::offset::Utc;
 use serde::de::{Deserialize, Deserializer, DeserializeOwned, Error as DeserializeError};
 use serde::ser::{Serialize, Serializer, Error as SerializeError};
 use std::collections::{HashSet, HashMap};
 use std::fmt::{self, Display, Debug};
+use std::fs::File;
 use std::io::Read;
 use std::marker::PhantomData;
+use std::str::FromStr;
 
-use crypto::{self, Signature, HashValue, HashAlgorithm, KeyPair};
-use error::{Result, ErrorKind};
+use crypto::{self, HashAlgorithm, HashValue, KeyId, KeyPair, Signature};
+use error::{Error, Result, ErrorKind};
 use interchange::DataInterchange;
 use shims;
 
 /// The TUF role.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Hash, Eq, Clone, Copy)]
 pub enum Role {
     /// The root role.
     Root,
@@ -36,6 +39,28 @@ impl Display for Role {
     }
 }
 
+impl FromStr for Role {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_ref() {
+            "root" => Ok(Role::Root),
+            "snapshot" => Ok(Role::Snapshot),
+            "targets" => Ok(Role::Targets),
+            "timestamp" => Ok(Role::Timestamp),
+            _ => bail!(ErrorKind::IllegalArgument(format!("Unknown role: {}", s)))
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Role {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
+        let s: String = Deserialize::deserialize(de)?;
+        s.parse().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
+    }
+}
+
+
 /// Top level trait used for role metadata.
 pub trait Metadata: Debug + PartialEq + Serialize + DeserializeOwned {
     /// The role associated with the metadata.
@@ -54,8 +79,8 @@ pub struct SignedMetadata<D: DataInterchange, M: Metadata> {
 }
 
 impl<D: DataInterchange, M: Metadata> SignedMetadata<D, M> {
-    pub fn from(targets: &TargetsMetadata, key_pair: &KeyPair) -> Result<Self> {
-        let data = D::serialize(&targets)?;
+    pub fn from(metadata: &M, key_pair: &KeyPair) -> Result<Self> {
+        let data = D::serialize(metadata)?;
         let canonical = D::canonicalize(&data)?;
         let sig = key_pair.sign(&canonical)?;
         Ok(SignedMetadata {
@@ -65,7 +90,101 @@ impl<D: DataInterchange, M: Metadata> SignedMetadata<D, M> {
             _metadata: PhantomData
         })
     }
+
+    pub fn signed(&self) -> &D::RawData {
+        &self.signed
+    }
 }
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RootMetadata {
+    version: u32,
+    expires: DateTime<Utc>,
+    keys: HashMap<KeyId, PublicKey>,
+    roles: HashMap<Role, RoleKeys>,
+    consistent_snapshot: bool,
+}
+
+impl RootMetadata {
+    pub fn new(
+        version: u32,
+        expires: DateTime<Utc>,
+        keys: HashMap<KeyId, PublicKey>,
+        roles: HashMap<Role, RoleKeys>,
+        consistent_snapshot: bool,
+    ) -> Result<Self> {
+        if version < 1 {
+            let msg = format!("Metadata version must be greater than zero. Found: {}", version);
+            bail!(ErrorKind::IllegalArgument(msg));
+        }
+        Ok(RootMetadata { version, expires, keys, roles, consistent_snapshot })
+    }
+
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    pub fn expires(&self) -> &DateTime<Utc> {
+        &self.expires
+    }
+
+    pub fn keys(&self) -> &HashMap<KeyId, PublicKey> {
+        &self.keys
+    }
+
+    pub fn roles(&self) -> &HashMap<Role, RoleKeys> {
+        &self.roles
+    }
+
+    pub fn consistent_snapshot(&self) -> bool {
+        self.consistent_snapshot
+    }
+
+    pub fn add_key(&mut self, role: Role, keyid: KeyId, pubkey: PublicKey) -> Result<()> {
+        if let Some(mut keys) = self.roles.get_mut(&role) {
+            let _ = keys.keyids.insert(keyid.clone());
+        } else {
+            bail!(ErrorKind::IllegalArgument("role not found".into()));
+        }
+        let _ = self.keys.insert(keyid, pubkey);
+        Ok(())
+    }
+
+    pub fn remove_key(&mut self, role: Role, keyid: &KeyId) -> Result<()> {
+        if let Some(mut keys) = self.roles.get_mut(&role) {
+            let _ = keys.keyids.remove(keyid);
+        } else {
+            bail!(ErrorKind::IllegalArgument("role not found".into()));
+        }
+        if let None = self.keys.remove(keyid) {
+            bail!(ErrorKind::IllegalArgument("key not found".into()));
+        }
+        Ok(())
+    }
+}
+
+impl Metadata for RootMetadata {
+    fn role() -> Role {
+        Role::Root
+    }
+}
+
+impl Serialize for RootMetadata {
+    fn serialize<S: Serializer>(&self, ser: S) -> ::std::result::Result<S::Ok, S::Error> {
+        shims::RootMetadata::from(self)
+            .map_err(|e| SerializeError::custom(format!("{:?}", e)))?
+            .serialize(ser)
+    }
+}
+
+impl<'de> Deserialize<'de> for RootMetadata {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
+        let intermediate: shims::RootMetadata = Deserialize::deserialize(de)?;
+        intermediate.try_into().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
+    }
+}
+
 
 /// Metadata for the targets role.
 #[derive(Debug, Clone, PartialEq)]
@@ -332,4 +451,43 @@ impl TargetCustom {
         let updated_at = created_at.clone();
         TargetCustom { name, version, uri, hardware_ids, created_at, updated_at }
     }
+}
+
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct PublicKey {
+    keytype: crypto::KeyType,
+    keyval: PublicKeyValue,
+}
+
+impl PublicKey {
+    pub fn from_file(typ: crypto::KeyType, path: &str) -> Result<Self> {
+        let mut file = File::open(path)?;
+        let mut public = String::new();
+        file.read_to_string(&mut public)?;
+        Ok(PublicKey { keytype: typ, keyval: PublicKeyValue { public } })
+    }
+
+    pub fn from_pubkey(typ: crypto::KeyType, public: &crypto::PubKeyValue) -> Result<Self> {
+        Ok(PublicKey {
+            keytype: typ,
+            keyval: PublicKeyValue {
+                public: match typ {
+                    crypto::KeyType::Ed25519 => HEXLOWER.encode(&*public),
+                    crypto::KeyType::Rsa => String::from_utf8(public.0.clone())?
+                }
+            }
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PublicKeyValue {
+    public: String
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct RoleKeys {
+    keyids: HashSet<KeyId>,
+    threshold: u32,
 }

@@ -336,7 +336,7 @@ fn expand_pub_key(pub_key: &[u8; 32]) -> Result<[u8; 65]> {
     Ok(out)
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
 pub enum KeyType {
     #[serde(rename = "ED25519")]
     Ed25519,
@@ -668,39 +668,13 @@ impl Deref for PrivKeyValue {
 }
 
 #[derive(PartialEq)]
-pub struct PubKeyValue(Vec<u8>);
+pub struct PubKeyValue(pub Vec<u8>);
 
 impl Deref for PubKeyValue {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
         &self.0
-    }
-}
-
-
-#[derive(Serialize, Deserialize)]
-pub struct PubKeyHex {
-    public: String
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct PubKeyTuf {
-    keytype: KeyType,
-    keyval: PubKeyHex,
-}
-
-impl PubKeyTuf {
-    pub fn from(typ: KeyType, public: &PubKeyValue) -> Result<Self> {
-        Ok(PubKeyTuf {
-            keytype: typ,
-            keyval: PubKeyHex {
-                public: match typ {
-                    KeyType::Ed25519 => HEXLOWER.encode(&*public),
-                    KeyType::Rsa => String::from_utf8(public.0.clone())?
-                }
-            }
-        })
     }
 }
 

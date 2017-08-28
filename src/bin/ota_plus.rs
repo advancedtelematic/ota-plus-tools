@@ -4,6 +4,7 @@ extern crate data_encoding;
 extern crate env_logger;
 #[macro_use]
 extern crate error_chain;
+extern crate pem;
 extern crate ota_plus;
 extern crate serde_json as json;
 extern crate reqwest;
@@ -15,16 +16,19 @@ use clap::{App, ArgMatches, AppSettings, SubCommand, Arg};
 use data_encoding::{BASE64, HEXLOWER};
 use ota_plus::cache::Cache;
 use ota_plus::config::{Config, AppConfig, AuthConfig};
-use ota_plus::crypto::{KeyPair, KeyType, HashAlgorithm, HashValue, PubKeyTuf};
+use ota_plus::crypto::{KeyId, KeyPair, KeyType, HashAlgorithm, HashValue};
 use ota_plus::http::Http;
 use ota_plus::interchange::{InterchangeType, Json};
-use ota_plus::tuf::{SignedMetadata, TargetsMetadata, TargetPath, TargetCustom, TargetDescription};
+use ota_plus::tuf::{PublicKey, Role, RootMetadata, SignedMetadata, TargetsMetadata,
+                    TargetPath, TargetCustom, TargetDescription};
 use reqwest::{Response, StatusCode};
 use std::collections::HashMap;
+use std::fs::File;
 use std::env;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
+
 
 error_chain! {
     foreign_links {
@@ -55,22 +59,30 @@ fn main() {
 
     let matches = parser().get_matches();
     let outcome = || -> Result<()> {
-        let root = matches.value_of("root")
+        let cache = matches.value_of("cache")
             .map(PathBuf::from)
             .or_else(|| env::home_dir().map(|path| path.join(".ota-plus")))
             .ok_or_else(|| ErrorKind::IllegalArgument("Missing `path`.".into()))?;
 
         match matches.subcommand() {
-            ("init", Some(sub)) => cmd_init(root, sub),
-            ("keygen", Some(sub)) => cmd_keygen(root, sub),
+            ("init", Some(sub)) => cmd_init(cache, sub),
+            ("keygen", Some(sub)) => cmd_keygen(cache, sub),
             ("tuf", Some(sub)) => match sub.subcommand() {
-                ("pushkey", Some(sub)) => cmd_tuf_pushkey(root, sub),
+                ("pushkey", Some(sub)) => cmd_tuf_pushkey(cache, sub),
+                ("root", Some(sub)) => match sub.subcommand() {
+                    ("parse", Some(sub)) => cmd_tuf_root_parse(cache, sub),
+                    ("add", Some(sub)) => cmd_tuf_root_add(cache, sub),
+                    ("remove", Some(sub)) => cmd_tuf_root_remove(cache, sub),
+                    ("sign", _) => cmd_tuf_root_sign(cache),
+                    ("push", _) => cmd_tuf_root_push(cache),
+                    _ => unreachable!()
+                },
                 ("targets", Some(sub)) => match sub.subcommand() {
-                    ("init", Some(sub)) => cmd_tuf_targets_init(root, sub),
-                    ("add", Some(sub)) => cmd_tuf_targets_add(root, sub),
-                    ("remove", Some(sub)) => cmd_tuf_targets_remove(root, sub),
-                    ("sign", _) => cmd_tuf_targets_sign(root),
-                    ("push", _) => cmd_tuf_targets_push(root),
+                    ("init", Some(sub)) => cmd_tuf_targets_init(cache, sub),
+                    ("add", Some(sub)) => cmd_tuf_targets_add(cache, sub),
+                    ("remove", Some(sub)) => cmd_tuf_targets_remove(cache, sub),
+                    ("sign", _) => cmd_tuf_targets_sign(cache),
+                    ("push", _) => cmd_tuf_targets_push(cache),
                     _ => unreachable!()
                 },
                 _ => unreachable!()
@@ -92,9 +104,9 @@ fn parser<'a, 'b>() -> App<'a, 'b> {
         .about("CLI tool for interacting with OTA+")
         .settings(&[AppSettings::SubcommandRequiredElseHelp])
         .arg(
-            Arg::with_name("root")
-                .help("The root path of the local cache. Defaults to `~/.ota-plus`.")
-                .long("root")
+            Arg::with_name("cache")
+                .help("The path of the local cache. Defaults to `~/.ota-plus`.")
+                .long("cache")
                 .takes_value(true)
                 .global(true),
         )
@@ -122,12 +134,14 @@ fn subcmd_init<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("tuf_url")
                 .long("tuf-url")
                 .takes_value(true)
+                .default_value("https://app.atsgarage.com")
                 .required(true)
         )
         .arg(
             Arg::with_name("token_url")
                 .long("token-url")
                 .takes_value(true)
+                .default_value("https://auth-plus.atsgarage.com")
                 .required(true)
         )
 }
@@ -135,22 +149,8 @@ fn subcmd_init<'a, 'b>() -> App<'a, 'b> {
 fn subcmd_keygen<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("keygen")
         .about("Generate private keys and print them as PKCS#8v2 DER to STDOUT")
-        .arg(
-            Arg::with_name("role")
-                .short("r")
-                .long("role")
-                .takes_value(true)
-                .required(true)
-                .possible_values(&["root", "targets", "timestamp", "snapshot"]),
-        )
-        .arg(
-            Arg::with_name("type")
-                .short("t")
-                .long("type")
-                .takes_value(true)
-                .possible_values(&["rsa"]),
-                // FIXME(PRO-3849): bouncy castle ed25519 key parsing
-        )
+        .arg(arg_role())
+        .arg(arg_type())
 }
 
 fn subcmd_tuf<'a, 'b>() -> App<'a, 'b> {
@@ -160,16 +160,51 @@ fn subcmd_tuf<'a, 'b>() -> App<'a, 'b> {
         .subcommand(
             SubCommand::with_name("pushkey")
                 .about("Push a new public key to the remote TUF repo")
+                .arg(arg_role())
+        )
+        .subcommand(subsubcmd_root())
+        .subcommand(subsubcmd_targets())
+}
+
+fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
+    SubCommand::with_name("root")
+        .about("Manipulate metadata for the `root` role")
+        .settings(&[AppSettings::SubcommandRequiredElseHelp])
+        .subcommand(
+            SubCommand::with_name("parse")
+                .about("Parse an existing root.json")
+                .arg(arg_path())
+        )
+        .subcommand(
+            SubCommand::with_name("add")
+                .about("Add a key to the root metadata")
+                .arg(arg_role())
+                .arg(arg_keyid())
+                .arg(arg_type())
                 .arg(
-                    Arg::with_name("role")
-                        .short("r")
-                        .long("role")
-                        .takes_value(true)
+                    Arg::with_name("pem_file")
+                        .help("Path to the PEM encoded public key")
+                        .short("p")
+                        .long("pem-file")
                         .required(true)
-                        .possible_values(&["root", "targets", "timestamp", "snapshot"])
+                        .takes_value(true)
+                        .validator(is_pem_public)
                 )
         )
-        .subcommand(subsubcmd_targets())
+        .subcommand(
+            SubCommand::with_name("remove")
+                .about("Remove a key from the root metadata")
+                .arg(arg_role())
+                .arg(arg_keyid())
+        )
+        .subcommand(
+            SubCommand::with_name("sign")
+                .about("Sign the root metadata")
+        )
+        .subcommand(
+            SubCommand::with_name("push")
+                .about("Push the signed root metadata to the TUF repo")
+        )
 }
 
 fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
@@ -205,15 +240,7 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
         .subcommand(
             SubCommand::with_name("add")
                 .about("Add a target to the staged metadata")
-                .arg(
-                    Arg::with_name("path")
-                        .help("The target filepath")
-                        .short("p")
-                        .long("path")
-                        .required(true)
-                        .takes_value(true)
-                        .validator(is_target_path),
-                )
+                .arg(arg_path())
                 .arg(
                     Arg::with_name("name")
                         .help("The target name")
@@ -281,85 +308,181 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
         .subcommand(
             SubCommand::with_name("remove")
                 .about("Remove a target from the staged metadata")
-                .arg(
-                    Arg::with_name("path")
-                        .help("The target filepath")
-                        .short("p")
-                        .long("path")
-                        .required(true)
-                        .takes_value(true)
-                        .validator(is_target_path),
-                ),
+                .arg(arg_path())
         )
-        .subcommand(SubCommand::with_name("sign").about("Sign the targets metadata"))
-        .subcommand(SubCommand::with_name("push").about("Push the signed targets metadata to the TUF repo"))
+        .subcommand(
+            SubCommand::with_name("sign")
+                .about("Sign the targets metadata")
+        )
+        .subcommand(
+            SubCommand::with_name("push")
+                .about("Push the signed targets metadata to the TUF repo")
+        )
+}
+
+
+fn arg_keyid<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name("keyid")
+        .help("The key ID")
+        .short("i")
+        .long("keyid")
+        .required(true)
+        .takes_value(true)
+        .validator(is_key_id)
+}
+
+fn arg_role<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name("role")
+        .short("r")
+        .long("role")
+        .takes_value(true)
+        .required(true)
+        .possible_values(&["root", "targets", "timestamp", "snapshot"])
+}
+
+fn arg_path<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name("path")
+        .help("The target path")
+        .short("p")
+        .long("path")
+        .required(true)
+        .takes_value(true)
+        .validator(is_target_path)
+}
+
+fn arg_type<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name("type")
+        .short("t")
+        .long("type")
+        .takes_value(true)
+        .required(true)
+        // FIXME(PRO-3849): bouncy castle ed25519 key parsing
+        .possible_values(&["rsa"])
+}
+
+
+fn is_key_id(s: String) -> ::std::result::Result<(), String> {
+    HEXLOWER.decode(s.as_bytes())
+        .map_err(|_| format!("Key ID not hex: {}", s))
+        .and_then(|_| if s.len() != 64 { Err("Key ID should be 64 hex chars".into()) } else { Ok(()) })
+}
+
+fn is_pem_public(s: String) -> ::std::result::Result<(), String> {
+    let mut file = File::open(s).map_err(|e| format!("error opening pem file: {}", e))?;
+    let mut text = String::new();
+    file.read_to_string(&mut text).map_err(|e| format!("error reading pem file: {}", e))?;
+    pem::parse(text).map(|_| ()).map_err(|e| format!("invalid pem key: {}", e))
 }
 
 fn is_positive_u64(s: String) -> ::std::result::Result<(), String> {
-    s.parse::<u64>().map(|_| ()).map_err(|_| format!("Not u64"))
+    s.parse::<u64>().map(|_| ()).map_err(|e| format!("invalid u64: {}", e))
 }
 
 fn is_natural_u32(s: String) -> ::std::result::Result<(), String> {
     s.parse::<u32>()
-        .map_err(|_| format!("Not a u32: {}", s))
+        .map_err(|e| format!("invalid u32: {}", e))
         .and_then(|x| if x < 1 { Err("Version cannot be less than 1".into()) } else { Ok(()) })
 }
 
 fn is_datetime(s: String) -> ::std::result::Result<(), String> {
-    Utc.datetime_from_str(&s, "%FT%TZ").map(|_| ()).map_err(|e| format!("{:?}", e))
+    Utc.datetime_from_str(&s, "%FT%TZ").map(|_| ()).map_err(|e| format!("invalid date: {:?}", e))
 }
 
 fn is_target_path(s: String) -> ::std::result::Result<(), String> {
-    TargetPath::new(s).map(|_| ()).map_err(|e| format!("Illegal target path: {}", e))
+    TargetPath::new(s).map(|_| ()).map_err(|e| format!("invalid target path: {}", e))
 }
 
 
-fn cmd_init(root: PathBuf, matches: &ArgMatches) -> Result<()> {
+fn cmd_init(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let client_id = matches.value_of("client_id").unwrap().parse().unwrap();
     let client_secret = matches.value_of("client_secret").unwrap();
-    let tuf_url = matches.value_of("tuf_url").unwrap_or("https://app.atsgarage.com");
-    let token_url = matches.value_of("token_url").unwrap_or("https://auth-plus.atsgarage.com");
-
+    let tuf_url = matches.value_of("tuf_url").unwrap();
+    let token_url = matches.value_of("token_url").unwrap();
     let app_conf = AppConfig::new(InterchangeType::Json, tuf_url.into());
     let auth_conf = AuthConfig::new(client_id, client_secret.into(), token_url.into());
-    Cache::new(root, Config::new(app_conf, auth_conf)).map(|_| ())?;
-    Ok(())
+    Ok(Cache::new(cache_path, Config::new(app_conf, auth_conf)).map(|_| ())?)
 }
 
-fn cmd_keygen(root: PathBuf, matches: &ArgMatches) -> Result<()> {
-    let role = matches.value_of("role").unwrap();
+fn cmd_keygen(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+    let cache = get_cache(cache_path)?;
+    let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
     let typ = KeyType::from_str(&matches.value_of("type").unwrap())?;
     let key = KeyPair::new(typ)?;
-    let cache = get_cache(root)?;
-    cache.add_key(&key, role)?;
-    Ok(())
+    Ok(cache.add_key(&key, role)?)
 }
 
-fn cmd_tuf_pushkey(root: PathBuf, matches: &ArgMatches) -> Result<()> {
-    let role = matches.value_of("role").unwrap();
-    let cache = get_cache(root)?;
+fn cmd_tuf_pushkey(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+    let cache = get_cache(cache_path)?;
+    let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
     let key = cache.get_key(role)?;
-
     let resp = Http::new(cache.config())?
-        .put(&format!("{}/keys/targets", cache.config().app().tuf_url()))?
-        .json(&PubKeyTuf::from(KeyType::Rsa, key.pub_key())?)?
+        .put(&format!("{}/keys/{}", cache.config().app().tuf_url(), role))?
+        .json(&PublicKey::from_pubkey(KeyType::Rsa, key.pub_key())?)?
         .send()?;
     check_status(resp)
 }
 
-fn cmd_tuf_targets_init(root: PathBuf, matches: &ArgMatches) -> Result<()> {
+fn cmd_tuf_root_parse(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+    let cache = get_cache(cache_path)?;
+    let path = matches.value_of("path").unwrap();
+    let force = matches.is_present("force");
+    let file = File::open(path).chain_err(|| "unable to open file")?;
+    let signed: SignedMetadata<Json, RootMetadata> = json::from_reader(file)
+        .chain_err(|| "unable to parse root.json")?;
+    let root: RootMetadata = json::from_value(signed.signed().clone())
+        .chain_err(|| "unable to parse root metadata")?;
+    Ok(cache.set_unsigned_root(&root, force)?)
+}
+
+fn cmd_tuf_root_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+    let cache = get_cache(cache_path)?;
+    let mut root = cache.get_unsigned_root().chain_err(|| "unable to open root.json")?;
+    let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
+    let keyid = KeyId::from_string(matches.value_of("keyid").unwrap()).unwrap();
+    let typ = KeyType::from_str(&matches.value_of("type").unwrap())?;
+    let pubkey = PublicKey::from_file(typ, matches.value_of("pem_file").unwrap())?;
+    root.add_key(role, keyid, pubkey)?;
+    Ok(cache.set_unsigned_root(&root, true)?)
+}
+
+fn cmd_tuf_root_remove(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+    let cache = get_cache(cache_path)?;
+    let mut root = cache.get_unsigned_root().chain_err(|| "unable to open root.json")?;
+    let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
+    let keyid = KeyId::from_string(matches.value_of("keyid").unwrap()).unwrap();
+    root.remove_key(role, &keyid)?;
+    Ok(cache.set_unsigned_root(&root, true)?)
+}
+
+fn cmd_tuf_root_sign(cache_path: PathBuf) -> Result<()> {
+    let cache = get_cache(cache_path)?;
+    let root = cache.get_unsigned_root().chain_err(|| "unable to open root.json")?;
+    let key = cache.get_key(Role::Root)?;
+    let signed: SignedMetadata<Json, RootMetadata> = SignedMetadata::from(&root, &key)?;
+    Ok(cache.set_signed_root(&signed, true)?)
+}
+
+fn cmd_tuf_root_push(cache_path: PathBuf) -> Result<()> {
+    let cache = get_cache(cache_path)?;
+    let resp = Http::new(cache.config())?
+        .post(&format!("{}/root", cache.config().app().tuf_url()))?
+        .json(&cache.get_signed_root::<Json>()?)?
+        .send()?;
+    check_status(resp)
+}
+
+fn cmd_tuf_targets_init(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let version = matches.value_of("version").unwrap().parse::<u32>().unwrap();
     let expires = matches.value_of("expires").unwrap();
     let expires = Utc.datetime_from_str(expires, "%FT%TZ").unwrap();
     let force = matches.is_present("force");
-    let cache = get_cache(root)?;
+    let cache = get_cache(cache_path)?;
     let targets = TargetsMetadata::new(version, expires, HashMap::new())
         .chain_err(|| "Couldn't create `targets` metadata")?;
-    cache.set_unsigned_targets(&targets, force)?;
-    Ok(())
+    Ok(cache.set_unsigned_targets(&targets, force)?)
 }
 
-fn cmd_tuf_targets_add(root: PathBuf, matches: &ArgMatches) -> Result<()> {
+fn cmd_tuf_targets_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let path = TargetPath::new(matches.value_of("path").unwrap().into()).unwrap();
     let name = matches.value_of("name").unwrap();
     let version = matches.value_of("version").unwrap();
@@ -382,46 +505,44 @@ fn cmd_tuf_targets_add(root: PathBuf, matches: &ArgMatches) -> Result<()> {
     };
     let custom = TargetCustom::new(name.into(), version.into(), Some(url.into()), ids);
 
-    let cache = get_cache(root)?;
+    let cache = get_cache(cache_path)?;
     let description = TargetDescription::new(length, hashes, Some(custom))?;
-    let mut targets = cache.unsigned_targets()?;
+    let mut targets = cache.get_unsigned_targets()?;
     if targets.targets().contains_key(&path) && !force {
         bail!(ErrorKind::Runtime("Target already exists".into()))
     }
     targets.add_target(path, description);
-    cache.set_unsigned_targets(&targets, true)?;
-    Ok(())
+    Ok(cache.set_unsigned_targets(&targets, true)?)
 }
 
-fn cmd_tuf_targets_remove(root: PathBuf, matches: &ArgMatches) -> Result<()> {
+fn cmd_tuf_targets_remove(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+    let cache = get_cache(cache_path)?;
     let target = TargetPath::new(matches.value_of("path").unwrap().into()).unwrap();
-    let cache = get_cache(root)?;
-    let mut targets = cache.unsigned_targets()?;
+    let mut targets = cache.get_unsigned_targets()?;
     targets.remove_target(&target);
-    cache.set_unsigned_targets(&targets, true)?;
-    Ok(())
+    Ok(cache.set_unsigned_targets(&targets, true)?)
 }
 
-fn cmd_tuf_targets_sign(root: PathBuf) -> Result<()> {
-    let cache = get_cache(root)?;
-    let key = cache.get_key("targets")?;
-    let targets = cache.unsigned_targets()?;
+fn cmd_tuf_targets_sign(cache_path: PathBuf) -> Result<()> {
+    let cache = get_cache(cache_path)?;
+    let key = cache.get_key(Role::Targets)?;
+    let targets = cache.get_unsigned_targets()?;
     let signed: SignedMetadata<Json, TargetsMetadata> = SignedMetadata::from(&targets, &key)?;
-    cache.set_signed_targets(&signed, true)?;
-    Ok(())
+    Ok(cache.set_signed_targets(&signed, true)?)
 }
 
-fn cmd_tuf_targets_push(root: PathBuf) -> Result<()> {
-    let cache = get_cache(root)?;
+fn cmd_tuf_targets_push(cache_path: PathBuf) -> Result<()> {
+    let cache = get_cache(cache_path)?;
     let resp = Http::new(cache.config())?
         .put(&format!("{}/targets", cache.config().app().tuf_url()))?
-        .json(&cache.signed_targets::<Json>()?)?
+        .json(&cache.get_signed_targets::<Json>()?)?
         .send()?;
     check_status(resp)
 }
 
-fn get_cache(root: PathBuf) -> Result<Cache> {
-    Cache::try_from(root).chain_err(|| "Could not initialize the cache")
+
+fn get_cache(cache_path: PathBuf) -> Result<Cache> {
+    Cache::try_from(cache_path).chain_err(|| "Could not initialize the cache")
 }
 
 fn check_status(mut resp: Response) -> Result<()> {

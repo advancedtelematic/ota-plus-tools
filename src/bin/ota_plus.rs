@@ -19,8 +19,8 @@ use ota_plus::config::{Config, AppConfig, AuthConfig};
 use ota_plus::crypto::{KeyId, KeyPair, KeyType, HashAlgorithm, HashValue};
 use ota_plus::http::Http;
 use ota_plus::interchange::{InterchangeType, Json};
-use ota_plus::tuf::{PublicKey, Role, RootMetadata, SignedMetadata, TargetsMetadata,
-                    TargetPath, TargetCustom, TargetDescription};
+use ota_plus::tuf::{PrivateKey, PublicKey, Role, RootMetadata, SignedMetadata,
+                    TargetsMetadata, TargetPath, TargetCustom, TargetDescription};
 use reqwest::{Response, StatusCode};
 use std::collections::HashMap;
 use std::fs::File;
@@ -75,6 +75,7 @@ fn main() {
                     ("remove", Some(sub)) => cmd_tuf_root_remove(cache, sub),
                     ("sign", _) => cmd_tuf_root_sign(cache),
                     ("push", _) => cmd_tuf_root_push(cache),
+                    ("rotate", Some(sub)) => cmd_tuf_root_rotate(cache, sub),
                     _ => unreachable!()
                 },
                 ("targets", Some(sub)) => match sub.subcommand() {
@@ -204,6 +205,16 @@ fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
         .subcommand(
             SubCommand::with_name("push")
                 .about("Push the signed root metadata to the TUF repo")
+        )
+        .subcommand(
+            SubCommand::with_name("rotate")
+                .about("Replace the old root signing key with a new one")
+                .settings(&[AppSettings::ArgRequiredElseHelp])
+                .arg(
+                    Arg::with_name("confirm_dangerous_operation")
+                        .help("Confirm you know what you are doing")
+                        .long("confirm-dangerous-operation"),
+                )
         )
 }
 
@@ -415,11 +426,11 @@ fn cmd_tuf_pushkey(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
     let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
     let key = cache.get_key(role)?;
-    let resp = Http::new(cache.config())?
+    let mut resp = Http::new(cache.config())?
         .put(&format!("{}/keys/{}", cache.config().app().tuf_url(), role))?
         .json(&PublicKey::from_pubkey(KeyType::Rsa, key.pub_key())?)?
         .send()?;
-    check_status(resp)
+    check_status(&mut resp)
 }
 
 fn cmd_tuf_root_parse(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
@@ -457,18 +468,73 @@ fn cmd_tuf_root_remove(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
 fn cmd_tuf_root_sign(cache_path: PathBuf) -> Result<()> {
     let cache = get_cache(cache_path)?;
     let root = cache.get_unsigned_root().chain_err(|| "unable to open root.json")?;
-    let key = cache.get_key(Role::Root)?;
+    let key = cache.get_key(Role::Root).chain_err(|| "no root key found")?;
     let signed: SignedMetadata<Json, RootMetadata> = SignedMetadata::from(&root, &key)?;
     Ok(cache.set_signed_root(&signed, true)?)
 }
 
 fn cmd_tuf_root_push(cache_path: PathBuf) -> Result<()> {
     let cache = get_cache(cache_path)?;
-    let resp = Http::new(cache.config())?
+    let mut resp = Http::new(cache.config())?
         .post(&format!("{}/root", cache.config().app().tuf_url()))?
         .json(&cache.get_signed_root::<Json>()?)?
         .send()?;
-    check_status(resp)
+    check_status(&mut resp)
+}
+
+fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+    if ! matches.is_present("confirm_dangerous_operation") {
+        bail!("This is a destructive operation. The '--confirm-dangerous-operation' flag must be provided.");
+    }
+    let cache = get_cache(cache_path)?;
+    let new_key_pair = cache.get_key(Role::Root).chain_err(|| "no local root key found")?;
+
+    let old_meta = Http::new(cache.config())?
+        .get(&format!("{}/root", cache.config().app().tuf_url()))?
+        .send()?;
+    let mut meta: RootMetadata = json::from_reader(old_meta)
+        .chain_err(|| "unable to read current root metadata")?;
+    let old_key = {
+        let mut role_keys = meta.roles_mut().get_mut(&Role::Root)
+            .ok_or_else(|| ErrorKind::Runtime("no current root keys".into()))?;
+        if role_keys.keys().len() != 1 {
+            bail!(format!("expected 1 role key ID, found {}", role_keys.keys().len()));
+        }
+        let old_key = role_keys.keys_mut().drain().last().expect("old_key");
+        role_keys.keys_mut().insert(new_key_pair.keyid().clone());
+        old_key
+    };
+
+    // FIXME: non-rsa keys
+    let new_pub_key = PublicKey::from_pubkey(KeyType::Rsa, new_key_pair.pub_key())
+        .chain_err(|| "unable to get new root public key")?;
+    let _ = meta.keys_mut().remove(&old_key);
+    let _ = meta.keys_mut().insert(new_key_pair.keyid().clone(), new_pub_key);
+
+    // WARNING: any errors after calling DELETE will probably screw the user account
+
+    let old_key_id = HEXLOWER.encode(&old_key.0);
+    let mut deleted_key = Http::new(cache.config())?
+        .delete(&format!("{}/root/private_keys/{}", cache.config().app().tuf_url(), old_key_id))?
+        .send()?;
+    check_status(&mut deleted_key)?;
+    let old_key: PrivateKey = json::from_reader(deleted_key)
+        .chain_err(|| "failed to parse old root private key as json")?;
+    let old_pem = pem::parse(old_key.private_pem())
+        .chain_err(|| "failed to parse old root private key as pem")?;
+    let old_key_pair = KeyPair::from(KeyType::Rsa, old_pem.contents)
+        .chain_err(|| "failed to parse key pair from old pem private role key")?;
+
+    let mut old_signed: SignedMetadata<Json, RootMetadata> = SignedMetadata::from(&meta, &old_key_pair)?;
+    let mut new_signed: SignedMetadata<Json, RootMetadata> = SignedMetadata::from(&meta, &new_key_pair)?;
+    new_signed.signatures_mut().append(old_signed.signatures_mut());
+    cache.set_signed_root(&new_signed, true)?;
+
+    let mut resp = Http::new(cache.config())?
+        .post(&format!("{}/root", cache.config().app().tuf_url()))?
+        .json(&new_signed)?
+        .send()?;
+    check_status(&mut resp)
 }
 
 fn cmd_tuf_targets_init(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
@@ -533,11 +599,11 @@ fn cmd_tuf_targets_sign(cache_path: PathBuf) -> Result<()> {
 
 fn cmd_tuf_targets_push(cache_path: PathBuf) -> Result<()> {
     let cache = get_cache(cache_path)?;
-    let resp = Http::new(cache.config())?
+    let mut resp = Http::new(cache.config())?
         .put(&format!("{}/targets", cache.config().app().tuf_url()))?
         .json(&cache.get_signed_targets::<Json>()?)?
         .send()?;
-    check_status(resp)
+    check_status(&mut resp)
 }
 
 
@@ -545,14 +611,14 @@ fn get_cache(cache_path: PathBuf) -> Result<Cache> {
     Cache::try_from(cache_path).chain_err(|| "Could not initialize the cache")
 }
 
-fn check_status(mut resp: Response) -> Result<()> {
+fn check_status(resp: &mut Response) -> Result<()> {
     match resp.status() {
         StatusCode::Ok | StatusCode::NoContent => Ok(()),
         status => {
-            let mut body = Vec::new();
-            resp.read_to_end(&mut body).unwrap();
-            let err = format!("Status: {}, Body:\n{}", status, String::from_utf8_lossy(&body));
-            bail!(ErrorKind::Runtime(err));
+            let mut data = Vec::new();
+            resp.read_to_end(&mut data).unwrap();
+            let body = String::from_utf8_lossy(&data);
+            bail!(ErrorKind::Runtime(format!("Status: {}, Body:\n{}", status, body)));
         }
     }
 }

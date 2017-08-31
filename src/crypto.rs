@@ -542,7 +542,7 @@ pub enum SignatureMethod {
 
 /// Wrapper for a key's ID.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct KeyId(Vec<u8>);
+pub struct KeyId(pub Vec<u8>);
 
 impl KeyId {
     pub fn calculate(public_key: &[u8]) -> Self {

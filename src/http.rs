@@ -29,6 +29,10 @@ impl<'c> Http<'c> {
         self.request(Method::Put, url)
     }
 
+    pub fn delete<U: IntoUrl>(&self, url: U) -> Result<RequestBuilder> {
+        self.request(Method::Delete, url)
+    }
+
     fn request<U: IntoUrl>(&self, method: Method, url: U) -> Result<RequestBuilder> {
         let token = self.generate_token()?;
         let mut req = self.client.request(method, url)?;

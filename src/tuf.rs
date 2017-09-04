@@ -91,6 +91,14 @@ impl<D: DataInterchange, M: Metadata> SignedMetadata<D, M> {
         })
     }
 
+    pub fn signatures(&self) -> &[Signature] {
+        &self.signatures
+    }
+
+    pub fn signatures_mut(&mut self) -> &mut Vec<Signature> {
+        &mut self.signatures
+    }
+
     pub fn signed(&self) -> &D::RawData {
         &self.signed
     }
@@ -133,8 +141,16 @@ impl RootMetadata {
         &self.keys
     }
 
+    pub fn keys_mut(&mut self) -> &mut HashMap<KeyId, PublicKey> {
+        &mut self.keys
+    }
+
     pub fn roles(&self) -> &HashMap<Role, RoleKeys> {
         &self.roles
+    }
+
+    pub fn roles_mut(&mut self) -> &mut HashMap<Role, RoleKeys> {
+        &mut self.roles
     }
 
     pub fn consistent_snapshot(&self) -> bool {
@@ -454,6 +470,22 @@ impl TargetCustom {
 }
 
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct RoleKeys {
+    keyids: HashSet<KeyId>,
+    threshold: u32,
+}
+
+impl RoleKeys {
+    pub fn keys(&self) -> &HashSet<KeyId> {
+        &self.keyids
+    }
+
+    pub fn keys_mut(&mut self) -> &mut HashSet<KeyId> {
+        &mut self.keyids
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PublicKey {
     keytype: crypto::KeyType,
@@ -486,8 +518,19 @@ pub struct PublicKeyValue {
     public: String
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct PrivateKey {
+    keytype: crypto::KeyType,
+    keyval: PrivateKeyValue,
+}
+
+impl PrivateKey {
+    pub fn private_pem(&self) -> &str {
+        &self.keyval.private
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct RoleKeys {
-    keyids: HashSet<KeyId>,
-    threshold: u32,
+pub struct PrivateKeyValue {
+    private: String
 }

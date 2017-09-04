@@ -4,7 +4,6 @@ extern crate chrono;
 extern crate curve25519_dalek;
 extern crate data_encoding;
 extern crate derp;
-extern crate env_logger;
 #[macro_use]
 extern crate error_chain;
 extern crate itoa;

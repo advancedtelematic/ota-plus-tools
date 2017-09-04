@@ -153,7 +153,7 @@ impl RootMetadata {
     }
 
     pub fn add_key(&mut self, role: Role, keyid: KeyId, pubkey: PublicKey) -> Result<()> {
-        if let Some(mut keys) = self.roles.get_mut(&role) {
+        if let Some(keys) = self.roles.get_mut(&role) {
             let _ = keys.keyids.insert(keyid.clone());
         } else {
             bail!(ErrorKind::IllegalArgument("role not found".into()));
@@ -163,7 +163,7 @@ impl RootMetadata {
     }
 
     pub fn remove_key(&mut self, role: Role, keyid: &KeyId) -> Result<()> {
-        if let Some(mut keys) = self.roles.get_mut(&role) {
+        if let Some(keys) = self.roles.get_mut(&role) {
             let _ = keys.keyids.remove(keyid);
         } else {
             bail!(ErrorKind::IllegalArgument("role not found".into()));

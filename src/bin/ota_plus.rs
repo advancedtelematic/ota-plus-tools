@@ -8,7 +8,6 @@ extern crate pem;
 extern crate ota_plus;
 extern crate serde_json as json;
 extern crate reqwest;
-extern crate uuid;
 
 use chrono::offset::Utc;
 use chrono::prelude::*;
@@ -495,7 +494,7 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
     let mut meta: RootMetadata = json::from_reader(old_meta)
         .chain_err(|| "unable to read current root metadata")?;
     let old_key = {
-        let mut role_keys = meta.roles_mut().get_mut(&Role::Root)
+        let role_keys = meta.roles_mut().get_mut(&Role::Root)
             .ok_or_else(|| ErrorKind::Runtime("no current root keys".into()))?;
         if role_keys.keys().len() != 1 {
             bail!(format!("expected 1 role key ID, found {}", role_keys.keys().len()));

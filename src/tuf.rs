@@ -16,15 +16,19 @@ use interchange::DataInterchange;
 use shims;
 
 /// The TUF role.
-#[derive(Debug, PartialEq, Serialize, Hash, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Hash, Eq, Clone, Copy)]
 pub enum Role {
     /// The root role.
+    #[serde(rename = "root")]
     Root,
     /// The snapshot role.
+    #[serde(rename = "snapshot")]
     Snapshot,
     /// The targets role.
+    #[serde(rename = "targets")]
     Targets,
     /// The timestamp role.
+    #[serde(rename = "timestamp")]
     Timestamp,
 }
 
@@ -52,15 +56,6 @@ impl FromStr for Role {
         }
     }
 }
-
-impl<'de> Deserialize<'de> for Role {
-    fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
-        let s: String = Deserialize::deserialize(de)?;
-        s.parse().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
-    }
-}
-
-
 /// Top level trait used for role metadata.
 pub trait Metadata: Debug + PartialEq + Serialize + DeserializeOwned {
     /// The role associated with the metadata.

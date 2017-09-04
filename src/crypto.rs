@@ -668,7 +668,7 @@ impl Deref for PrivKeyValue {
 }
 
 #[derive(PartialEq)]
-pub struct PubKeyValue(pub Vec<u8>);
+pub struct PubKeyValue(Vec<u8>);
 
 impl Deref for PubKeyValue {
     type Target = [u8];

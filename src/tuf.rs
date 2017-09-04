@@ -506,7 +506,7 @@ impl PublicKey {
             keyval: PublicKeyValue {
                 public: match typ {
                     crypto::KeyType::Ed25519 => HEXLOWER.encode(&*public),
-                    crypto::KeyType::Rsa => String::from_utf8(public.0.clone())?
+                    crypto::KeyType::Rsa => String::from_utf8(public.to_vec())?
                 }
             }
         })

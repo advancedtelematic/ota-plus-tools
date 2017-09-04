@@ -168,6 +168,11 @@ impl RootMetadata {
         } else {
             bail!(ErrorKind::IllegalArgument("role not found".into()));
         }
+
+        if self.roles.iter().filter(|&(_, def)| def.keyids.contains(keyid)).collect::<Vec<_>>().len() == 0 {
+            let _ = self.keys.remove(keyid);
+        }
+
         if let None = self.keys.remove(keyid) {
             bail!(ErrorKind::IllegalArgument("key not found".into()));
         }

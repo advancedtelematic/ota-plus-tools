@@ -1,27 +1,34 @@
+use data_encoding::HEXLOWER;
 use chrono::DateTime;
 use chrono::offset::Utc;
 use serde::de::{Deserialize, Deserializer, DeserializeOwned, Error as DeserializeError};
 use serde::ser::{Serialize, Serializer, Error as SerializeError};
 use std::collections::{HashSet, HashMap};
 use std::fmt::{self, Display, Debug};
+use std::fs::File;
 use std::io::Read;
 use std::marker::PhantomData;
+use std::str::FromStr;
 
-use crypto::{self, Signature, HashValue, HashAlgorithm};
-use error::{Result, ErrorKind};
+use crypto::{self, HashAlgorithm, HashValue, KeyId, KeyPair, Signature};
+use error::{Error, Result, ErrorKind};
 use interchange::DataInterchange;
 use shims;
 
 /// The TUF role.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Hash, Eq, Clone, Copy)]
 pub enum Role {
     /// The root role.
+    #[serde(rename = "root")]
     Root,
     /// The snapshot role.
+    #[serde(rename = "snapshot")]
     Snapshot,
     /// The targets role.
+    #[serde(rename = "targets")]
     Targets,
     /// The timestamp role.
+    #[serde(rename = "timestamp")]
     Timestamp,
 }
 
@@ -36,6 +43,19 @@ impl Display for Role {
     }
 }
 
+impl FromStr for Role {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_ref() {
+            "root" => Ok(Role::Root),
+            "snapshot" => Ok(Role::Snapshot),
+            "targets" => Ok(Role::Targets),
+            "timestamp" => Ok(Role::Timestamp),
+            _ => bail!(ErrorKind::IllegalArgument(format!("Unknown role: {}", s)))
+        }
+    }
+}
 /// Top level trait used for role metadata.
 pub trait Metadata: Debug + PartialEq + Serialize + DeserializeOwned {
     /// The role associated with the metadata.
@@ -44,18 +64,143 @@ pub trait Metadata: Debug + PartialEq + Serialize + DeserializeOwned {
 
 /// A piece of raw metadata with attached signatures.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SignedMetadata<D, M>
-where
-    D: DataInterchange,
-    M: Metadata,
-{
+pub struct SignedMetadata<D: DataInterchange, M: Metadata> {
     signatures: Vec<Signature>,
     signed: D::RawData,
     #[serde(skip_serializing, skip_deserializing)]
-    _interchage: PhantomData<D>,
+    _interchange: PhantomData<D>,
     #[serde(skip_serializing, skip_deserializing)]
     _metadata: PhantomData<M>,
 }
+
+impl<D: DataInterchange, M: Metadata> SignedMetadata<D, M> {
+    pub fn from(metadata: &M, key_pair: &KeyPair) -> Result<Self> {
+        let data = D::serialize(metadata)?;
+        let canonical = D::canonicalize(&data)?;
+        let sig = key_pair.sign(&canonical)?;
+        Ok(SignedMetadata {
+            signatures: vec![sig],
+            signed: data,
+            _interchange: PhantomData,
+            _metadata: PhantomData
+        })
+    }
+
+    pub fn signatures(&self) -> &[Signature] {
+        &self.signatures
+    }
+
+    pub fn signatures_mut(&mut self) -> &mut Vec<Signature> {
+        &mut self.signatures
+    }
+
+    pub fn signed(&self) -> &D::RawData {
+        &self.signed
+    }
+}
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RootMetadata {
+    version: u32,
+    expires: DateTime<Utc>,
+    keys: HashMap<KeyId, PublicKey>,
+    roles: HashMap<Role, RoleKeys>,
+    consistent_snapshot: bool,
+}
+
+impl RootMetadata {
+    pub fn new(
+        version: u32,
+        expires: DateTime<Utc>,
+        keys: HashMap<KeyId, PublicKey>,
+        roles: HashMap<Role, RoleKeys>,
+        consistent_snapshot: bool,
+    ) -> Result<Self> {
+        if version < 1 {
+            let msg = format!("Metadata version must be greater than zero. Found: {}", version);
+            bail!(ErrorKind::IllegalArgument(msg));
+        }
+        Ok(RootMetadata { version, expires, keys, roles, consistent_snapshot })
+    }
+
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    pub fn expires(&self) -> &DateTime<Utc> {
+        &self.expires
+    }
+
+    pub fn keys(&self) -> &HashMap<KeyId, PublicKey> {
+        &self.keys
+    }
+
+    pub fn keys_mut(&mut self) -> &mut HashMap<KeyId, PublicKey> {
+        &mut self.keys
+    }
+
+    pub fn roles(&self) -> &HashMap<Role, RoleKeys> {
+        &self.roles
+    }
+
+    pub fn roles_mut(&mut self) -> &mut HashMap<Role, RoleKeys> {
+        &mut self.roles
+    }
+
+    pub fn consistent_snapshot(&self) -> bool {
+        self.consistent_snapshot
+    }
+
+    pub fn add_key(&mut self, role: Role, keyid: KeyId, pubkey: PublicKey) -> Result<()> {
+        if let Some(keys) = self.roles.get_mut(&role) {
+            let _ = keys.keyids.insert(keyid.clone());
+        } else {
+            bail!(ErrorKind::IllegalArgument("role not found".into()));
+        }
+        let _ = self.keys.insert(keyid, pubkey);
+        Ok(())
+    }
+
+    pub fn remove_key(&mut self, role: Role, keyid: &KeyId) -> Result<()> {
+        if let Some(keys) = self.roles.get_mut(&role) {
+            let _ = keys.keyids.remove(keyid);
+        } else {
+            bail!(ErrorKind::IllegalArgument("role not found".into()));
+        }
+
+        if self.roles.iter().filter(|&(_, def)| def.keyids.contains(keyid)).collect::<Vec<_>>().len() == 0 {
+            let _ = self.keys.remove(keyid);
+        }
+
+        if let None = self.keys.remove(keyid) {
+            bail!(ErrorKind::IllegalArgument("key not found".into()));
+        }
+        Ok(())
+    }
+}
+
+impl Metadata for RootMetadata {
+    fn role() -> Role {
+        Role::Root
+    }
+}
+
+impl Serialize for RootMetadata {
+    fn serialize<S: Serializer>(&self, ser: S) -> ::std::result::Result<S::Ok, S::Error> {
+        shims::RootMetadata::from(self)
+            .map_err(|e| SerializeError::custom(format!("{:?}", e)))?
+            .serialize(ser)
+    }
+}
+
+impl<'de> Deserialize<'de> for RootMetadata {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
+        let intermediate: shims::RootMetadata = Deserialize::deserialize(de)?;
+        intermediate.try_into().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
+    }
+}
+
 
 /// Metadata for the targets role.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,17 +218,10 @@ impl TargetsMetadata {
         targets: HashMap<TargetPath, TargetDescription>,
     ) -> Result<Self> {
         if version < 1 {
-            bail!(ErrorKind::IllegalArgument(format!(
-                "Metadata version must be greater than zero. Found: {}",
-                version
-            )));
+            let msg = format!("Metadata version must be greater than zero. Found: {}", version);
+            bail!(ErrorKind::IllegalArgument(msg));
         }
-
-        Ok(TargetsMetadata {
-            version: version,
-            expires: expires,
-            targets: targets,
-        })
+        Ok(TargetsMetadata { version, expires, targets })
     }
 
     /// The version number.
@@ -117,10 +255,7 @@ impl Metadata for TargetsMetadata {
 }
 
 impl Serialize for TargetsMetadata {
-    fn serialize<S>(&self, ser: S) -> ::std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
+    fn serialize<S: Serializer>(&self, ser: S) -> ::std::result::Result<S::Ok, S::Error> {
         shims::TargetsMetadata::from(self)
             .map_err(|e| SerializeError::custom(format!("{:?}", e)))?
             .serialize(ser)
@@ -128,14 +263,9 @@ impl Serialize for TargetsMetadata {
 }
 
 impl<'de> Deserialize<'de> for TargetsMetadata {
-    fn deserialize<D>(de: D) -> ::std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
         let intermediate: shims::TargetsMetadata = Deserialize::deserialize(de)?;
-        intermediate.try_into().map_err(|e| {
-            DeserializeError::custom(format!("{:?}", e))
-        })
+        intermediate.try_into().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
     }
 }
 
@@ -197,21 +327,14 @@ impl TargetPath {
     pub fn matches_chain(&self, parents: &[HashSet<TargetPath>]) -> bool {
         if parents.is_empty() {
             return false;
-        }
-        if parents.len() == 1 {
+        } else if parents.len() == 1 {
             return parents[0].iter().any(|p| p == self || self.is_child(p));
         }
 
-        let new = parents[1..]
-            .iter()
+        let new = parents[1..].iter()
             .map(|group| {
-                group
-                    .iter()
-                    .filter(|parent| {
-                        parents[0].iter().any(
-                            |p| parent.is_child(p) || parent == &p,
-                        )
-                    })
+                group.iter()
+                    .filter(|parent| parents[0].iter().any(|p| parent.is_child(p) || parent == &p))
                     .cloned()
                     .collect::<HashSet<_>>()
             })
@@ -238,6 +361,8 @@ impl<'de> Deserialize<'de> for TargetPath {
 pub struct TargetDescription {
     length: u64,
     hashes: HashMap<HashAlgorithm, HashValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    custom: Option<TargetCustom>,
 }
 
 impl TargetDescription {
@@ -245,17 +370,16 @@ impl TargetDescription {
     ///
     /// Note: Creating this manually could lead to errors, and the `from_reader` method is
     /// preferred.
-    pub fn new(length: u64, hashes: HashMap<HashAlgorithm, HashValue>) -> Result<Self> {
+    pub fn new(
+        length: u64,
+        hashes: HashMap<HashAlgorithm, HashValue>,
+        custom: Option<TargetCustom>
+    ) -> Result<Self> {
         if hashes.is_empty() {
-            bail!(ErrorKind::IllegalArgument(
-                "Cannot have empty set of hashes".into(),
-            ));
+            bail!(ErrorKind::IllegalArgument("Cannot have empty set of hashes".into()));
         }
 
-        Ok(TargetDescription {
-            length: length,
-            hashes: hashes,
-        })
+        Ok(TargetDescription { length, hashes, custom })
     }
 
     /// Read the from the given reader and calculate the length and hash values.
@@ -274,7 +398,7 @@ impl TargetDescription {
     ///     let sha256 = HashValue::new(BASE64.decode(s.as_bytes()).unwrap());
     ///
     ///     let target_description =
-    ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha256]).unwrap();
+    ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha256], None).unwrap();
     ///     assert_eq!(target_description.length(), bytes.len() as u64);
     ///     assert_eq!(target_description.hashes().get(&HashAlgorithm::Sha256), Some(&sha256));
     ///
@@ -283,20 +407,18 @@ impl TargetDescription {
     ///     let sha512 = HashValue::new(BASE64.decode(s.as_bytes()).unwrap());
     ///
     ///     let target_description =
-    ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha512]).unwrap();
+    ///         TargetDescription::from_reader(bytes, &[HashAlgorithm::Sha512], None).unwrap();
     ///     assert_eq!(target_description.length(), bytes.len() as u64);
     ///     assert_eq!(target_description.hashes().get(&HashAlgorithm::Sha512), Some(&sha512));
     /// }
     /// ```
-    pub fn from_reader<R>(read: R, hash_algs: &[HashAlgorithm]) -> Result<Self>
-    where
-        R: Read,
-    {
+    pub fn from_reader<R: Read>(
+        read: R,
+        hash_algs: &[HashAlgorithm],
+        custom: Option<TargetCustom>
+    ) -> Result<Self> {
         let (length, hashes) = crypto::calculate_hashes(read, hash_algs)?;
-        Ok(TargetDescription {
-            length: length,
-            hashes: hashes,
-        })
+        Ok(TargetDescription { length, hashes, custom })
     }
 
     /// The maximum length of the target.
@@ -311,13 +433,104 @@ impl TargetDescription {
 }
 
 impl<'de> Deserialize<'de> for TargetDescription {
-    fn deserialize<D>(de: D) -> ::std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
         let intermediate: shims::TargetDescription = Deserialize::deserialize(de)?;
-        intermediate.try_into().map_err(|e| {
-            DeserializeError::custom(format!("{:?}", e))
+        intermediate.try_into().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
+    }
+}
+
+/// Custom metadata optionally attached to a `TargetDescription`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TargetCustom {
+    name: String,
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uri: Option<String>,
+    #[serde(rename = "hardwareIds")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hardware_ids: Option<Vec<String>>,
+    #[serde(rename = "createdAt")]
+    created_at: DateTime<Utc>,
+    #[serde(rename = "updatedAt")]
+    updated_at: DateTime<Utc>,
+}
+
+impl TargetCustom {
+    /// Create a new `TargetCustom`.
+    pub fn new(
+        name: String,
+        version: String,
+        uri: Option<String>,
+        hardware_ids: Option<Vec<String>>
+    ) -> Self {
+        let created_at = Utc::now();
+        let updated_at = created_at.clone();
+        TargetCustom { name, version, uri, hardware_ids, created_at, updated_at }
+    }
+}
+
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct RoleKeys {
+    keyids: HashSet<KeyId>,
+    threshold: u32,
+}
+
+impl RoleKeys {
+    pub fn keys(&self) -> &HashSet<KeyId> {
+        &self.keyids
+    }
+
+    pub fn keys_mut(&mut self) -> &mut HashSet<KeyId> {
+        &mut self.keyids
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct PublicKey {
+    keytype: crypto::KeyType,
+    keyval: PublicKeyValue,
+}
+
+impl PublicKey {
+    pub fn from_file(typ: crypto::KeyType, path: &str) -> Result<Self> {
+        let mut file = File::open(path)?;
+        let mut public = String::new();
+        file.read_to_string(&mut public)?;
+        Ok(PublicKey { keytype: typ, keyval: PublicKeyValue { public } })
+    }
+
+    pub fn from_pubkey(typ: crypto::KeyType, public: &crypto::PubKeyValue) -> Result<Self> {
+        Ok(PublicKey {
+            keytype: typ,
+            keyval: PublicKeyValue {
+                public: match typ {
+                    crypto::KeyType::Ed25519 => HEXLOWER.encode(&*public),
+                    crypto::KeyType::Rsa => String::from_utf8(public.to_vec())?
+                }
+            }
         })
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PublicKeyValue {
+    public: String
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct PrivateKey {
+    keytype: crypto::KeyType,
+    keyval: PrivateKeyValue,
+}
+
+impl PrivateKey {
+    pub fn private_pem(&self) -> &str {
+        &self.keyval.private
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PrivateKeyValue {
+    private: String
 }

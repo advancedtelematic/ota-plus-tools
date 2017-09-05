@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 
 use error::Result;
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
 pub enum InterchangeType {
     #[serde(rename = "json")]
     Json,

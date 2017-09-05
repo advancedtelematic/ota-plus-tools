@@ -1,3 +1,0 @@
-# ota-plus-tools
-
-CLI tool for interacting with OTA+.

@@ -25,12 +25,15 @@ impl Config {
 #[derive(Serialize, Deserialize)]
 pub struct AppConfig {
     interchange: InterchangeType,
-    tuf_url: String
+    tuf_url: String,
 }
 
 impl AppConfig {
     pub fn new(interchange: InterchangeType, tuf_url: String) -> Self {
-        AppConfig { interchange, tuf_url }
+        AppConfig {
+            interchange,
+            tuf_url,
+        }
     }
 
     pub fn interchange(&self) -> InterchangeType {
@@ -51,7 +54,11 @@ pub struct AuthConfig {
 
 impl AuthConfig {
     pub fn new(client_id: Uuid, client_secret: String, token_url: String) -> Self {
-        AuthConfig { client_id, client_secret, token_url }
+        AuthConfig {
+            client_id,
+            client_secret,
+            token_url,
+        }
     }
 
     pub fn client_id(&self) -> Uuid {

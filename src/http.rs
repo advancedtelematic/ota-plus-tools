@@ -55,7 +55,9 @@ impl<'c> Http<'c> {
             .send()?;
 
         if resp.status() != StatusCode::Ok {
-            bail!(ErrorKind::Runtime(format!("Bad status code: {:?}", resp.status())));
+            bail!(ErrorKind::Runtime(
+                format!("Bad status code: {:?}", resp.status()),
+            ));
         } else {
             json::from_reader(resp).map_err(|e| e.into())
         }
@@ -66,7 +68,7 @@ impl<'c> Http<'c> {
 #[derive(Serialize, Deserialize, Debug)]
 struct AccessToken {
     pub access_token: String,
-    pub token_type:   String,
-    pub expires_in:   i32,
-    pub scope:        String
+    pub token_type: String,
+    pub expires_in: i32,
+    pub scope: String,
 }

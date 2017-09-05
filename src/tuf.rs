@@ -52,7 +52,7 @@ impl FromStr for Role {
             "snapshot" => Ok(Role::Snapshot),
             "targets" => Ok(Role::Targets),
             "timestamp" => Ok(Role::Timestamp),
-            _ => bail!(ErrorKind::IllegalArgument(format!("Unknown role: {}", s)))
+            _ => bail!(ErrorKind::IllegalArgument(format!("Unknown role: {}", s))),
         }
     }
 }
@@ -82,7 +82,7 @@ impl<D: DataInterchange, M: Metadata> SignedMetadata<D, M> {
             signatures: vec![sig],
             signed: data,
             _interchange: PhantomData,
-            _metadata: PhantomData
+            _metadata: PhantomData,
         })
     }
 
@@ -118,10 +118,19 @@ impl RootMetadata {
         consistent_snapshot: bool,
     ) -> Result<Self> {
         if version < 1 {
-            let msg = format!("Metadata version must be greater than zero. Found: {}", version);
+            let msg = format!(
+                "Metadata version must be greater than zero. Found: {}",
+                version
+            );
             bail!(ErrorKind::IllegalArgument(msg));
         }
-        Ok(RootMetadata { version, expires, keys, roles, consistent_snapshot })
+        Ok(RootMetadata {
+            version,
+            expires,
+            keys,
+            roles,
+            consistent_snapshot,
+        })
     }
 
     pub fn version(&self) -> u32 {
@@ -169,7 +178,12 @@ impl RootMetadata {
             bail!(ErrorKind::IllegalArgument("role not found".into()));
         }
 
-        if self.roles.iter().filter(|&(_, def)| def.keyids.contains(keyid)).collect::<Vec<_>>().len() == 0 {
+        if self.roles
+            .iter()
+            .filter(|&(_, def)| def.keyids.contains(keyid))
+            .collect::<Vec<_>>()
+            .len() == 0
+        {
             let _ = self.keys.remove(keyid);
         }
 
@@ -197,7 +211,9 @@ impl Serialize for RootMetadata {
 impl<'de> Deserialize<'de> for RootMetadata {
     fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
         let intermediate: shims::RootMetadata = Deserialize::deserialize(de)?;
-        intermediate.try_into().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
+        intermediate.try_into().map_err(|e| {
+            DeserializeError::custom(format!("{:?}", e))
+        })
     }
 }
 
@@ -218,10 +234,17 @@ impl TargetsMetadata {
         targets: HashMap<TargetPath, TargetDescription>,
     ) -> Result<Self> {
         if version < 1 {
-            let msg = format!("Metadata version must be greater than zero. Found: {}", version);
+            let msg = format!(
+                "Metadata version must be greater than zero. Found: {}",
+                version
+            );
             bail!(ErrorKind::IllegalArgument(msg));
         }
-        Ok(TargetsMetadata { version, expires, targets })
+        Ok(TargetsMetadata {
+            version,
+            expires,
+            targets,
+        })
     }
 
     /// The version number.
@@ -265,7 +288,9 @@ impl Serialize for TargetsMetadata {
 impl<'de> Deserialize<'de> for TargetsMetadata {
     fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
         let intermediate: shims::TargetsMetadata = Deserialize::deserialize(de)?;
-        intermediate.try_into().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
+        intermediate.try_into().map_err(|e| {
+            DeserializeError::custom(format!("{:?}", e))
+        })
     }
 }
 
@@ -331,10 +356,16 @@ impl TargetPath {
             return parents[0].iter().any(|p| p == self || self.is_child(p));
         }
 
-        let new = parents[1..].iter()
+        let new = parents[1..]
+            .iter()
             .map(|group| {
-                group.iter()
-                    .filter(|parent| parents[0].iter().any(|p| parent.is_child(p) || parent == &p))
+                group
+                    .iter()
+                    .filter(|parent| {
+                        parents[0].iter().any(
+                            |p| parent.is_child(p) || parent == &p,
+                        )
+                    })
                     .cloned()
                     .collect::<HashSet<_>>()
             })
@@ -373,13 +404,19 @@ impl TargetDescription {
     pub fn new(
         length: u64,
         hashes: HashMap<HashAlgorithm, HashValue>,
-        custom: Option<TargetCustom>
+        custom: Option<TargetCustom>,
     ) -> Result<Self> {
         if hashes.is_empty() {
-            bail!(ErrorKind::IllegalArgument("Cannot have empty set of hashes".into()));
+            bail!(ErrorKind::IllegalArgument(
+                "Cannot have empty set of hashes".into(),
+            ));
         }
 
-        Ok(TargetDescription { length, hashes, custom })
+        Ok(TargetDescription {
+            length,
+            hashes,
+            custom,
+        })
     }
 
     /// Read the from the given reader and calculate the length and hash values.
@@ -415,10 +452,14 @@ impl TargetDescription {
     pub fn from_reader<R: Read>(
         read: R,
         hash_algs: &[HashAlgorithm],
-        custom: Option<TargetCustom>
+        custom: Option<TargetCustom>,
     ) -> Result<Self> {
         let (length, hashes) = crypto::calculate_hashes(read, hash_algs)?;
-        Ok(TargetDescription { length, hashes, custom })
+        Ok(TargetDescription {
+            length,
+            hashes,
+            custom,
+        })
     }
 
     /// The maximum length of the target.
@@ -435,7 +476,9 @@ impl TargetDescription {
 impl<'de> Deserialize<'de> for TargetDescription {
     fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
         let intermediate: shims::TargetDescription = Deserialize::deserialize(de)?;
-        intermediate.try_into().map_err(|e| DeserializeError::custom(format!("{:?}", e)))
+        intermediate.try_into().map_err(|e| {
+            DeserializeError::custom(format!("{:?}", e))
+        })
     }
 }
 
@@ -461,11 +504,18 @@ impl TargetCustom {
         name: String,
         version: String,
         uri: Option<String>,
-        hardware_ids: Option<Vec<String>>
+        hardware_ids: Option<Vec<String>>,
     ) -> Self {
         let created_at = Utc::now();
         let updated_at = created_at.clone();
-        TargetCustom { name, version, uri, hardware_ids, created_at, updated_at }
+        TargetCustom {
+            name,
+            version,
+            uri,
+            hardware_ids,
+            created_at,
+            updated_at,
+        }
     }
 }
 
@@ -497,7 +547,10 @@ impl PublicKey {
         let mut file = File::open(path)?;
         let mut public = String::new();
         file.read_to_string(&mut public)?;
-        Ok(PublicKey { keytype: typ, keyval: PublicKeyValue { public } })
+        Ok(PublicKey {
+            keytype: typ,
+            keyval: PublicKeyValue { public },
+        })
     }
 
     pub fn from_pubkey(typ: crypto::KeyType, public: &crypto::PubKeyValue) -> Result<Self> {
@@ -506,16 +559,16 @@ impl PublicKey {
             keyval: PublicKeyValue {
                 public: match typ {
                     crypto::KeyType::Ed25519 => HEXLOWER.encode(&*public),
-                    crypto::KeyType::Rsa => String::from_utf8(public.to_vec())?
-                }
-            }
+                    crypto::KeyType::Rsa => String::from_utf8(public.to_vec())?,
+                },
+            },
         })
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PublicKeyValue {
-    public: String
+    public: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -532,5 +585,5 @@ impl PrivateKey {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PrivateKeyValue {
-    private: String
+    private: String,
 }

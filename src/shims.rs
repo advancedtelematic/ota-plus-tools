@@ -41,17 +41,26 @@ impl RootMetadata {
             expires: format_datetime(&tuf.expires()),
             keys: tuf.keys().clone(),
             roles: tuf.roles().clone(),
-            consistent_snapshot: tuf.consistent_snapshot()
+            consistent_snapshot: tuf.consistent_snapshot(),
         })
     }
 
     pub fn try_into(self) -> Result<tuf::RootMetadata> {
         if self.typ != tuf::Role::Root {
-            let msg = format!("Attempted to decode root metadata labeled as {:?}", self.typ);
+            let msg = format!(
+                "Attempted to decode root metadata labeled as {:?}",
+                self.typ
+            );
             bail!(ErrorKind::Encoding(msg));
         }
         let expires = parse_datetime(&self.expires)?;
-        tuf::RootMetadata::new(self.version, expires, self.keys, self.roles, self.consistent_snapshot)
+        tuf::RootMetadata::new(
+            self.version,
+            expires,
+            self.keys,
+            self.roles,
+            self.consistent_snapshot,
+        )
     }
 }
 
@@ -77,7 +86,10 @@ impl TargetsMetadata {
 
     pub fn try_into(self) -> Result<tuf::TargetsMetadata> {
         if self.typ != tuf::Role::Targets {
-            let msg = format!("Attempted to decode targets metadata labeled as {:?}", self.typ);
+            let msg = format!(
+                "Attempted to decode targets metadata labeled as {:?}",
+                self.typ
+            );
             bail!(ErrorKind::Encoding(msg));
         }
         tuf::TargetsMetadata::new(self.version, parse_datetime(&self.expires)?, self.targets)

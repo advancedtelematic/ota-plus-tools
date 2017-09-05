@@ -18,8 +18,8 @@ use ota_plus::config::{Config, AppConfig, AuthConfig};
 use ota_plus::crypto::{KeyId, KeyPair, KeyType, HashAlgorithm, HashValue};
 use ota_plus::http::Http;
 use ota_plus::interchange::{InterchangeType, Json};
-use ota_plus::tuf::{PrivateKey, PublicKey, Role, RootMetadata, SignedMetadata,
-                    TargetsMetadata, TargetPath, TargetCustom, TargetDescription};
+use ota_plus::tuf::{PrivateKey, PublicKey, Role, RootMetadata, SignedMetadata, TargetsMetadata,
+                    TargetPath, TargetCustom, TargetDescription};
 use reqwest::{Response, StatusCode};
 use std::collections::HashMap;
 use std::fs::File;
@@ -58,7 +58,8 @@ fn main() {
 
     let matches = parser().get_matches();
     let outcome = || -> Result<()> {
-        let cache = matches.value_of("cache")
+        let cache = matches
+            .value_of("cache")
             .map(PathBuf::from)
             .or_else(|| env::home_dir().map(|path| path.join(".ota-plus")))
             .ok_or_else(|| ErrorKind::IllegalArgument("Missing `path`.".into()))?;
@@ -66,28 +67,34 @@ fn main() {
         match matches.subcommand() {
             ("init", Some(sub)) => cmd_init(cache, sub),
             ("keygen", Some(sub)) => cmd_keygen(cache, sub),
-            ("tuf", Some(sub)) => match sub.subcommand() {
-                ("pushkey", Some(sub)) => cmd_tuf_pushkey(cache, sub),
-                ("root", Some(sub)) => match sub.subcommand() {
-                    ("parse", Some(sub)) => cmd_tuf_root_parse(cache, sub),
-                    ("add", Some(sub)) => cmd_tuf_root_add(cache, sub),
-                    ("remove", Some(sub)) => cmd_tuf_root_remove(cache, sub),
-                    ("sign", _) => cmd_tuf_root_sign(cache),
-                    ("push", _) => cmd_tuf_root_push(cache),
-                    ("rotate", Some(sub)) => cmd_tuf_root_rotate(cache, sub),
-                    _ => unreachable!()
-                },
-                ("targets", Some(sub)) => match sub.subcommand() {
-                    ("init", Some(sub)) => cmd_tuf_targets_init(cache, sub),
-                    ("add", Some(sub)) => cmd_tuf_targets_add(cache, sub),
-                    ("remove", Some(sub)) => cmd_tuf_targets_remove(cache, sub),
-                    ("sign", _) => cmd_tuf_targets_sign(cache),
-                    ("push", _) => cmd_tuf_targets_push(cache),
-                    _ => unreachable!()
-                },
-                _ => unreachable!()
-            },
-            _ => unreachable!()
+            ("tuf", Some(sub)) => {
+                match sub.subcommand() {
+                    ("pushkey", Some(sub)) => cmd_tuf_pushkey(cache, sub),
+                    ("root", Some(sub)) => {
+                        match sub.subcommand() {
+                            ("parse", Some(sub)) => cmd_tuf_root_parse(cache, sub),
+                            ("add", Some(sub)) => cmd_tuf_root_add(cache, sub),
+                            ("remove", Some(sub)) => cmd_tuf_root_remove(cache, sub),
+                            ("sign", _) => cmd_tuf_root_sign(cache),
+                            ("push", _) => cmd_tuf_root_push(cache),
+                            ("rotate", Some(sub)) => cmd_tuf_root_rotate(cache, sub),
+                            _ => unreachable!(),
+                        }
+                    }
+                    ("targets", Some(sub)) => {
+                        match sub.subcommand() {
+                            ("init", Some(sub)) => cmd_tuf_targets_init(cache, sub),
+                            ("add", Some(sub)) => cmd_tuf_targets_add(cache, sub),
+                            ("remove", Some(sub)) => cmd_tuf_targets_remove(cache, sub),
+                            ("sign", _) => cmd_tuf_targets_sign(cache),
+                            ("push", _) => cmd_tuf_targets_push(cache),
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => unreachable!(),
         }
     }();
 
@@ -122,33 +129,35 @@ fn subcmd_init<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("client_id")
                 .long("client-id")
                 .takes_value(true)
-                .required(true)
+                .required(true),
         )
         .arg(
             Arg::with_name("client_secret")
                 .long("client-secret")
                 .takes_value(true)
-                .required(true)
+                .required(true),
         )
         .arg(
             Arg::with_name("tuf_url")
                 .long("tuf-url")
                 .takes_value(true)
                 .default_value("https://app.atsgarage.com")
-                .required(true)
+                .required(true),
         )
         .arg(
             Arg::with_name("token_url")
                 .long("token-url")
                 .takes_value(true)
                 .default_value("https://auth-plus.atsgarage.com")
-                .required(true)
+                .required(true),
         )
 }
 
 fn subcmd_keygen<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("keygen")
-        .about("Generate private keys and print them as PKCS#8v2 DER to STDOUT")
+        .about(
+            "Generate private keys and print them as PKCS#8v2 DER to STDOUT",
+        )
         .arg(arg_role())
         .arg(arg_type())
 }
@@ -160,7 +169,7 @@ fn subcmd_tuf<'a, 'b>() -> App<'a, 'b> {
         .subcommand(
             SubCommand::with_name("pushkey")
                 .about("Push a new public key to the remote TUF repo")
-                .arg(arg_role())
+                .arg(arg_role()),
         )
         .subcommand(subsubcmd_root())
         .subcommand(subsubcmd_targets())
@@ -173,7 +182,7 @@ fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
         .subcommand(
             SubCommand::with_name("parse")
                 .about("Parse an existing root.json")
-                .arg(arg_path())
+                .arg(arg_path()),
         )
         .subcommand(
             SubCommand::with_name("add")
@@ -188,23 +197,21 @@ fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
                         .long("pem-file")
                         .required(true)
                         .takes_value(true)
-                        .validator(is_pem_public)
-                )
+                        .validator(is_pem_public),
+                ),
         )
         .subcommand(
             SubCommand::with_name("remove")
                 .about("Remove a key from the root metadata")
                 .arg(arg_role())
-                .arg(arg_keyid())
+                .arg(arg_keyid()),
         )
-        .subcommand(
-            SubCommand::with_name("sign")
-                .about("Sign the root metadata")
-        )
-        .subcommand(
-            SubCommand::with_name("push")
-                .about("Push the signed root metadata to the TUF repo")
-        )
+        .subcommand(SubCommand::with_name("sign").about(
+            "Sign the root metadata",
+        ))
+        .subcommand(SubCommand::with_name("push").about(
+            "Push the signed root metadata to the TUF repo",
+        ))
         .subcommand(
             SubCommand::with_name("rotate")
                 .about("Replace the old root signing key with a new one")
@@ -213,7 +220,7 @@ fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
                     Arg::with_name("confirm_dangerous_operation")
                         .help("Confirm you know what you are doing")
                         .long("confirm-dangerous-operation"),
-                )
+                ),
         )
 }
 
@@ -257,7 +264,7 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                         .short("n")
                         .long("name")
                         .required(true)
-                        .takes_value(true)
+                        .takes_value(true),
                 )
                 .arg(
                     Arg::with_name("version")
@@ -265,7 +272,7 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                         .short("v")
                         .long("version")
                         .required(true)
-                        .takes_value(true)
+                        .takes_value(true),
                 )
                 .arg(
                     Arg::with_name("length")
@@ -281,53 +288,51 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                         .help("The URL referencing the target")
                         .long("url")
                         .takes_value(true)
-                        .required(true)
+                        .required(true),
                 )
                 .arg(
                     Arg::with_name("encoding")
                         .help("The encoding used for the hashes")
                         .default_value("hexlower")
-                        .possible_values(&["hexlower", "base64"])
+                        .possible_values(&["hexlower", "base64"]),
                 )
                 .arg(
                     Arg::with_name("sha256")
                         .help("The SHA256 hash of the target")
                         .long("sha256")
-                        .takes_value(true)
+                        .takes_value(true),
                 )
                 .arg(
                     Arg::with_name("sha512")
                         .help("The SHA512 hash of the target")
                         .long("sha512")
-                        .takes_value(true)
+                        .takes_value(true),
                 )
                 .arg(
                     Arg::with_name("hardware-id")
                         .help("Restrict the target to specific hardware IDs")
                         .long("hardware-id")
                         .takes_value(true)
-                        .multiple(true)
+                        .multiple(true),
                 )
                 .arg(
                     Arg::with_name("force")
                         .help("Add the target even it already exists")
                         .short("f")
                         .long("force"),
-                )
+                ),
         )
         .subcommand(
             SubCommand::with_name("remove")
                 .about("Remove a target from the staged metadata")
-                .arg(arg_path())
+                .arg(arg_path()),
         )
-        .subcommand(
-            SubCommand::with_name("sign")
-                .about("Sign the targets metadata")
-        )
-        .subcommand(
-            SubCommand::with_name("push")
-                .about("Push the signed targets metadata to the TUF repo")
-        )
+        .subcommand(SubCommand::with_name("sign").about(
+            "Sign the targets metadata",
+        ))
+        .subcommand(SubCommand::with_name("push").about(
+            "Push the signed targets metadata to the TUF repo",
+        ))
 }
 
 
@@ -372,34 +377,57 @@ fn arg_type<'a, 'b>() -> Arg<'a, 'b> {
 
 
 fn is_key_id(s: String) -> ::std::result::Result<(), String> {
-    HEXLOWER.decode(s.as_bytes())
+    HEXLOWER
+        .decode(s.as_bytes())
         .map_err(|_| format!("Key ID not hex: {}", s))
-        .and_then(|_| if s.len() != 64 { Err("Key ID should be 64 hex chars".into()) } else { Ok(()) })
+        .and_then(|_| if s.len() != 64 {
+            Err("Key ID should be 64 hex chars".into())
+        } else {
+            Ok(())
+        })
 }
 
 fn is_pem_public(s: String) -> ::std::result::Result<(), String> {
-    let mut file = File::open(s).map_err(|e| format!("error opening pem file: {}", e))?;
+    let mut file = File::open(s).map_err(
+        |e| format!("error opening pem file: {}", e),
+    )?;
     let mut text = String::new();
-    file.read_to_string(&mut text).map_err(|e| format!("error reading pem file: {}", e))?;
-    pem::parse(text).map(|_| ()).map_err(|e| format!("invalid pem key: {}", e))
+    file.read_to_string(&mut text).map_err(|e| {
+        format!("error reading pem file: {}", e)
+    })?;
+    pem::parse(text).map(|_| ()).map_err(|e| {
+        format!("invalid pem key: {}", e)
+    })
 }
 
 fn is_positive_u64(s: String) -> ::std::result::Result<(), String> {
-    s.parse::<u64>().map(|_| ()).map_err(|e| format!("invalid u64: {}", e))
+    s.parse::<u64>().map(|_| ()).map_err(|e| {
+        format!("invalid u64: {}", e)
+    })
 }
 
 fn is_natural_u32(s: String) -> ::std::result::Result<(), String> {
     s.parse::<u32>()
         .map_err(|e| format!("invalid u32: {}", e))
-        .and_then(|x| if x < 1 { Err("Version cannot be less than 1".into()) } else { Ok(()) })
+        .and_then(|x| if x < 1 {
+            Err("Version cannot be less than 1".into())
+        } else {
+            Ok(())
+        })
 }
 
 fn is_datetime(s: String) -> ::std::result::Result<(), String> {
-    Utc.datetime_from_str(&s, "%FT%TZ").map(|_| ()).map_err(|e| format!("invalid date: {:?}", e))
+    Utc.datetime_from_str(&s, "%FT%TZ").map(|_| ()).map_err(
+        |e| {
+            format!("invalid date: {:?}", e)
+        },
+    )
 }
 
 fn is_target_path(s: String) -> ::std::result::Result<(), String> {
-    TargetPath::new(s).map(|_| ()).map_err(|e| format!("invalid target path: {}", e))
+    TargetPath::new(s).map(|_| ()).map_err(|e| {
+        format!("invalid target path: {}", e)
+    })
 }
 
 
@@ -410,7 +438,8 @@ fn cmd_init(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let token_url = matches.value_of("token_url").unwrap();
     let app_conf = AppConfig::new(InterchangeType::Json, tuf_url.into());
     let auth_conf = AuthConfig::new(client_id, client_secret.into(), token_url.into());
-    Ok(Cache::new(cache_path, Config::new(app_conf, auth_conf)).map(|_| ())?)
+    Ok(Cache::new(cache_path, Config::new(app_conf, auth_conf))
+        .map(|_| ())?)
 }
 
 fn cmd_keygen(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
@@ -437,16 +466,20 @@ fn cmd_tuf_root_parse(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let path = matches.value_of("path").unwrap();
     let force = matches.is_present("force");
     let file = File::open(path).chain_err(|| "unable to open file")?;
-    let signed: SignedMetadata<Json, RootMetadata> = json::from_reader(file)
-        .chain_err(|| "unable to parse root.json")?;
-    let root: RootMetadata = json::from_value(signed.signed().clone())
-        .chain_err(|| "unable to parse root metadata")?;
+    let signed: SignedMetadata<Json, RootMetadata> = json::from_reader(file).chain_err(
+        || "unable to parse root.json",
+    )?;
+    let root: RootMetadata = json::from_value(signed.signed().clone()).chain_err(
+        || "unable to parse root metadata",
+    )?;
     Ok(cache.set_unsigned_root(&root, force)?)
 }
 
 fn cmd_tuf_root_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
-    let mut root = cache.get_unsigned_root().chain_err(|| "unable to open root.json")?;
+    let mut root = cache.get_unsigned_root().chain_err(
+        || "unable to open root.json",
+    )?;
     let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
     let keyid = KeyId::from_string(matches.value_of("keyid").unwrap()).unwrap();
     let typ = KeyType::from_str(&matches.value_of("type").unwrap())?;
@@ -457,7 +490,9 @@ fn cmd_tuf_root_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
 
 fn cmd_tuf_root_remove(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
-    let mut root = cache.get_unsigned_root().chain_err(|| "unable to open root.json")?;
+    let mut root = cache.get_unsigned_root().chain_err(
+        || "unable to open root.json",
+    )?;
     let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
     let keyid = KeyId::from_string(matches.value_of("keyid").unwrap()).unwrap();
     root.remove_key(role, &keyid)?;
@@ -466,7 +501,9 @@ fn cmd_tuf_root_remove(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
 
 fn cmd_tuf_root_sign(cache_path: PathBuf) -> Result<()> {
     let cache = get_cache(cache_path)?;
-    let root = cache.get_unsigned_root().chain_err(|| "unable to open root.json")?;
+    let root = cache.get_unsigned_root().chain_err(
+        || "unable to open root.json",
+    )?;
     let key = cache.get_key(Role::Root).chain_err(|| "no root key found")?;
     let signed: SignedMetadata<Json, RootMetadata> = SignedMetadata::from(&root, &key)?;
     Ok(cache.set_signed_root(&signed, true)?)
@@ -482,22 +519,31 @@ fn cmd_tuf_root_push(cache_path: PathBuf) -> Result<()> {
 }
 
 fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
-    if ! matches.is_present("confirm_dangerous_operation") {
-        bail!("This is a destructive operation. The '--confirm-dangerous-operation' flag must be provided.");
+    if !matches.is_present("confirm_dangerous_operation") {
+        bail!(
+            "This is a destructive operation. The '--confirm-dangerous-operation' flag must be provided."
+        );
     }
     let cache = get_cache(cache_path)?;
-    let new_key_pair = cache.get_key(Role::Root).chain_err(|| "no local root key found")?;
+    let new_key_pair = cache.get_key(Role::Root).chain_err(
+        || "no local root key found",
+    )?;
 
     let old_meta = Http::new(cache.config())?
         .get(&format!("{}/root", cache.config().app().tuf_url()))?
         .send()?;
-    let mut meta: RootMetadata = json::from_reader(old_meta)
-        .chain_err(|| "unable to read current root metadata")?;
+    let mut meta: RootMetadata = json::from_reader(old_meta).chain_err(
+        || "unable to read current root metadata",
+    )?;
     let old_key = {
-        let role_keys = meta.roles_mut().get_mut(&Role::Root)
-            .ok_or_else(|| ErrorKind::Runtime("no current root keys".into()))?;
+        let role_keys = meta.roles_mut().get_mut(&Role::Root).ok_or_else(|| {
+            ErrorKind::Runtime("no current root keys".into())
+        })?;
         if role_keys.keys().len() != 1 {
-            bail!(format!("expected 1 role key ID, found {}", role_keys.keys().len()));
+            bail!(format!(
+                "expected 1 role key ID, found {}",
+                role_keys.keys().len()
+            ));
         }
         let old_key = role_keys.keys_mut().drain().last().expect("old_key");
         role_keys.keys_mut().insert(new_key_pair.keyid().clone());
@@ -508,25 +554,39 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
     let new_pub_key = PublicKey::from_pubkey(KeyType::Rsa, new_key_pair.pub_key())
         .chain_err(|| "unable to get new root public key")?;
     let _ = meta.keys_mut().remove(&old_key);
-    let _ = meta.keys_mut().insert(new_key_pair.keyid().clone(), new_pub_key);
+    let _ = meta.keys_mut().insert(
+        new_key_pair.keyid().clone(),
+        new_pub_key,
+    );
 
     // WARNING: any errors after calling DELETE will probably screw the user account
 
     let old_key_id = HEXLOWER.encode(&old_key.0);
     let mut deleted_key = Http::new(cache.config())?
-        .delete(&format!("{}/root/private_keys/{}", cache.config().app().tuf_url(), old_key_id))?
+        .delete(&format!(
+            "{}/root/private_keys/{}",
+            cache.config().app().tuf_url(),
+            old_key_id
+        ))?
         .send()?;
     check_status(&mut deleted_key)?;
-    let old_key: PrivateKey = json::from_reader(deleted_key)
-        .chain_err(|| "failed to parse old root private key as json")?;
-    let old_pem = pem::parse(old_key.private_pem())
-        .chain_err(|| "failed to parse old root private key as pem")?;
-    let old_key_pair = KeyPair::from(KeyType::Rsa, old_pem.contents)
-        .chain_err(|| "failed to parse key pair from old pem private role key")?;
+    let old_key: PrivateKey = json::from_reader(deleted_key).chain_err(
+        || "failed to parse old root private key as json",
+    )?;
+    let old_pem = pem::parse(old_key.private_pem()).chain_err(
+        || "failed to parse old root private key as pem",
+    )?;
+    let old_key_pair = KeyPair::from(KeyType::Rsa, old_pem.contents).chain_err(
+        || "failed to parse key pair from old pem private role key",
+    )?;
 
-    let mut old_signed: SignedMetadata<Json, RootMetadata> = SignedMetadata::from(&meta, &old_key_pair)?;
-    let mut new_signed: SignedMetadata<Json, RootMetadata> = SignedMetadata::from(&meta, &new_key_pair)?;
-    new_signed.signatures_mut().append(old_signed.signatures_mut());
+    let mut old_signed: SignedMetadata<Json, RootMetadata> =
+        SignedMetadata::from(&meta, &old_key_pair)?;
+    let mut new_signed: SignedMetadata<Json, RootMetadata> =
+        SignedMetadata::from(&meta, &new_key_pair)?;
+    new_signed.signatures_mut().append(
+        old_signed.signatures_mut(),
+    );
     cache.set_signed_root(&new_signed, true)?;
 
     let mut resp = Http::new(cache.config())?
@@ -566,7 +626,7 @@ fn cmd_tuf_targets_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
     let url = matches.value_of("url").unwrap();
     let ids = match matches.values_of("hardware-id") {
         None => None,
-        Some(vals) => Some(vals.map(String::from).collect::<Vec<_>>())
+        Some(vals) => Some(vals.map(String::from).collect::<Vec<_>>()),
     };
     let custom = TargetCustom::new(name.into(), version.into(), Some(url.into()), ids);
 
@@ -617,7 +677,9 @@ fn check_status(resp: &mut Response) -> Result<()> {
             let mut data = Vec::new();
             resp.read_to_end(&mut data).unwrap();
             let body = String::from_utf8_lossy(&data);
-            bail!(ErrorKind::Runtime(format!("Status: {}, Body:\n{}", status, body)));
+            bail!(ErrorKind::Runtime(
+                format!("Status: {}, Body:\n{}", status, body),
+            ));
         }
     }
 }
@@ -644,7 +706,9 @@ impl FromStr for Encoding {
         match s {
             "hexlower" => Ok(Encoding::Hexlower),
             "base64" => Ok(Encoding::Base64),
-            _ => Err(ErrorKind::IllegalArgument(format!("Unknown encoding: {}", s)).into()),
+            _ => Err(
+                ErrorKind::IllegalArgument(format!("Unknown encoding: {}", s)).into(),
+            ),
         }
     }
 }

@@ -238,7 +238,9 @@ pub fn calculate_hashes<R: Read>(
     hash_algs: &[HashAlgorithm],
 ) -> Result<(u64, HashMap<HashAlgorithm, HashValue>)> {
     if hash_algs.len() == 0 {
-        bail!(ErrorKind::IllegalArgument("Cannot provide empty set of hash algorithms".into()));
+        bail!(ErrorKind::IllegalArgument(
+            "Cannot provide empty set of hash algorithms".into(),
+        ));
     }
 
     let mut size = 0;
@@ -267,7 +269,9 @@ pub fn calculate_hashes<R: Read>(
 
     let hashes = hashes
         .drain()
-        .map(|(k, v)| (k.clone(), HashValue::new(v.finish().as_ref().to_vec())))
+        .map(|(k, v)| {
+            (k.clone(), HashValue::new(v.finish().as_ref().to_vec()))
+        })
         .collect();
     Ok((size, hashes))
 }
@@ -278,7 +282,9 @@ pub fn calculate_hashes<R: Read>(
 /// See also: [RFC 3279](http://www.rfc-base.org/txt/rfc-3279.txt)
 fn wrap_ed25519_public_point(pub_point: &[u8]) -> Result<Vec<u8>> {
     if pub_point.len() != 32 {
-        bail!(ErrorKind::IllegalArgument("Curve public point must be 32 bytes".into()))
+        bail!(ErrorKind::IllegalArgument(
+            "Curve public point must be 32 bytes".into(),
+        ))
     }
 
     let mut pub_point_array = [0; 32];
@@ -321,7 +327,9 @@ fn expand_pub_key(pub_key: &[u8; 32]) -> Result<[u8; 65]> {
         T: _,
     } = CompressedEdwardsY(pub_key.clone())
         .decompress()
-        .ok_or_else(|| ErrorKind::Crypto("Could not decompress curve point.".into()))?;
+        .ok_or_else(|| {
+            ErrorKind::Crypto("Could not decompress curve point.".into())
+        })?;
     let x = x.to_bytes();
     let y = y.to_bytes();
 
@@ -351,7 +359,11 @@ impl FromStr for KeyType {
         match s.to_lowercase().as_ref() {
             "ed25519" => Ok(KeyType::Ed25519),
             "rsa" => Ok(KeyType::Rsa),
-            _ => bail!(ErrorKind::IllegalArgument(format!("Unknown key type: {}", s)))
+            _ => {
+                bail!(ErrorKind::IllegalArgument(
+                    format!("Unknown key type: {}", s),
+                ))
+            }
         }
     }
 }
@@ -374,9 +386,12 @@ impl KeyPair {
             KeyType::Ed25519 => {
                 let pkcs8_bytes = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
                     .map(|a| a.to_vec())
-                    .map_err(|_| ErrorKind::Crypto("Failed to generate Ed25519 key".into()))?;
-                let pair = Ed25519KeyPair::from_pkcs8(untrusted::Input::from(&pkcs8_bytes))
-                    .map_err(|_| ErrorKind::Crypto("Failed to parse PKCS#8 bytes".into()))?;
+                    .map_err(|_| {
+                        ErrorKind::Crypto("Failed to generate Ed25519 key".into())
+                    })?;
+                let pair =
+                    Ed25519KeyPair::from_pkcs8(untrusted::Input::from(&pkcs8_bytes))
+                        .map_err(|_| ErrorKind::Crypto("Failed to parse PKCS#8 bytes".into()))?;
                 let pub_key = wrap_ed25519_public_point(pair.public_key_bytes())?;
                 Ok(KeyPair {
                     inner: KeyPairInner::Ed25519(pair),
@@ -388,11 +403,19 @@ impl KeyPair {
 
             KeyType::Rsa => {
                 let gen = Command::new("openssl")
-                    .args(&["genpkey",
-                            "-algorithm", "RSA",
-                            "-pkeyopt", "rsa_keygen_bits:2048",
-                            "-pkeyopt", "rsa_keygen_pubexp:65537",
-                            "-outform", "der"])
+                    .args(
+                        &[
+                            "genpkey",
+                            "-algorithm",
+                            "RSA",
+                            "-pkeyopt",
+                            "rsa_keygen_bits:2048",
+                            "-pkeyopt",
+                            "rsa_keygen_pubexp:65537",
+                            "-outform",
+                            "der",
+                        ],
+                    )
                     .stdout(Stdio::piped())
                     .spawn()?;
                 let priv_key = gen.wait_with_output()?.stdout;
@@ -404,8 +427,9 @@ impl KeyPair {
     pub fn from(typ: KeyType, priv_key: Vec<u8>) -> Result<Self> {
         match typ {
             KeyType::Ed25519 => {
-                let pair = Ed25519KeyPair::from_pkcs8(untrusted::Input::from(&priv_key))
-                    .map_err(|_| ErrorKind::Crypto("Failed to parse PKCS#8 bytes".into()))?;
+                let pair =
+                    Ed25519KeyPair::from_pkcs8(untrusted::Input::from(&priv_key))
+                        .map_err(|_| ErrorKind::Crypto("Failed to parse PKCS#8 bytes".into()))?;
                 let pub_key = wrap_ed25519_public_point(pair.public_key_bytes())?;
                 Ok(KeyPair {
                     inner: KeyPairInner::Ed25519(pair),
@@ -415,7 +439,7 @@ impl KeyPair {
                 })
             }
 
-            KeyType::Rsa => Self::rsa_from_priv(priv_key)
+            KeyType::Rsa => Self::rsa_from_priv(priv_key),
         }
     }
 
@@ -434,12 +458,16 @@ impl KeyPair {
     pub fn sign(&self, msg: &[u8]) -> Result<Signature> {
         let (sig, method) = match self.inner {
             KeyPairInner::Ed25519(ref ed) => {
-                (SignatureValue(ed.sign(msg).as_ref().into()), SignatureMethod::Ed25519)
-            },
+                (
+                    SignatureValue(ed.sign(msg).as_ref().into()),
+                    SignatureMethod::Ed25519,
+                )
+            }
 
             KeyPairInner::Rsa(ref rsa) => {
-                let mut signing_state = RSASigningState::new(rsa.clone())
-                    .map_err(|_| ErrorKind::Crypto("Could not initialize RSA signing state.".into()))?;
+                let mut signing_state = RSASigningState::new(rsa.clone()).map_err(|_| {
+                    ErrorKind::Crypto("Could not initialize RSA signing state.".into())
+                })?;
                 let rng = SystemRandom::new();
                 let mut buf = vec![0; signing_state.key_pair().public_modulus_len()];
                 signing_state
@@ -458,7 +486,9 @@ impl KeyPair {
 
     fn rsa_from_priv(priv_key: Vec<u8>) -> Result<Self> {
         let pair = RSAKeyPair::from_der(untrusted::Input::from(&priv_key))
-            .map_err(|_| ErrorKind::Crypto("Could not parse DER RSA private key".into()))?;
+            .map_err(|_| {
+                ErrorKind::Crypto("Could not parse DER RSA private key".into())
+            })?;
         if pair.public_modulus_len() < 256 {
             let len = pair.public_modulus_len() * 8;
             let err = format!("RSA public modulus must be >= 2048. Size: {}", len);
@@ -521,8 +551,9 @@ impl Serialize for SignatureValue {
 impl<'de> Deserialize<'de> for SignatureValue {
     fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
         let string: String = Deserialize::deserialize(de)?;
-        SignatureValue::from_string(&string)
-            .map_err(|e| DeserializeError::custom(format!("Signature value was not valid base64: {:?}", e)))
+        SignatureValue::from_string(&string).map_err(|e| {
+            DeserializeError::custom(format!("Signature value was not valid base64: {:?}", e))
+        })
     }
 }
 
@@ -553,7 +584,9 @@ impl KeyId {
 
     pub fn from_string(string: &str) -> Result<Self> {
         if string.len() != 64 {
-            bail!(ErrorKind::IllegalArgument("Base16 key ID must be 64 characters long".into()));
+            bail!(ErrorKind::IllegalArgument(
+                "Base16 key ID must be 64 characters long".into(),
+            ));
         }
         Ok(KeyId(HEXLOWER.decode(string.as_bytes())?))
     }
@@ -628,8 +661,9 @@ impl Serialize for HashValue {
 impl<'de> Deserialize<'de> for HashValue {
     fn deserialize<D: Deserializer<'de>>(de: D) -> ::std::result::Result<Self, D::Error> {
         let s: String = Deserialize::deserialize(de)?;
-        let bytes = HEXLOWER.decode(s.as_bytes())
-            .map_err(|e| DeserializeError::custom(format!("Base64: {:?}", e)))?;
+        let bytes = HEXLOWER.decode(s.as_bytes()).map_err(|e| {
+            DeserializeError::custom(format!("Base64: {:?}", e))
+        })?;
         Ok(HashValue(bytes))
     }
 }

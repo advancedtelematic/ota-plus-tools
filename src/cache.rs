@@ -117,6 +117,13 @@ impl Cache {
             format!("Could not create path {:?}", path)
         })?;
         file.write_all(key.priv_key())?;
+
+        let path = self.path.join("keys").join(format!("{}.pub", role));
+        let mut file = File::create(&path).chain_err(|| {
+            format!("Could not create path {:?}", path)
+        })?;
+        file.write_all(key.pub_key())?;
+
         Ok(())
     }
 

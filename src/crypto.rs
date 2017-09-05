@@ -417,6 +417,7 @@ impl KeyPair {
                         ],
                     )
                     .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
                     .spawn()?;
                 let priv_key = gen.wait_with_output()?.stdout;
                 Self::rsa_from_priv(priv_key)

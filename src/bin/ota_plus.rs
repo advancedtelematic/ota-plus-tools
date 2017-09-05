@@ -371,8 +371,7 @@ fn arg_type<'a, 'b>() -> Arg<'a, 'b> {
         .long("type")
         .takes_value(true)
         .required(true)
-        // FIXME(PRO-3849): bouncy castle ed25519 key parsing
-        .possible_values(&["rsa"])
+        .possible_values(&["ed25519", "rsa"])
 }
 
 

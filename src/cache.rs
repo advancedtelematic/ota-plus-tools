@@ -128,7 +128,7 @@ impl Cache {
         let mut file = File::open(path)?;
         let mut data = Vec::new();
         file.read_to_end(&mut data)?;
-        // FIXME: actual keytype
+        // FIXME: actual key_type
         KeyPair::from(KeyType::Rsa, data)
     }
 

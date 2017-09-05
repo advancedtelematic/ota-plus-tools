@@ -537,9 +537,13 @@ impl RoleKeys {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+// TODO this needs a custom deserialize because it's possible that the key_type/key_val don't match
+// and we are currently doing no validatoin
 pub struct PublicKey {
-    keytype: crypto::KeyType,
-    keyval: PublicKeyValue,
+    #[serde(rename = "keytype")]
+    key_type: crypto::KeyType,
+    #[serde(rename = "keyval")]
+    key_val: PublicKeyValue,
 }
 
 impl PublicKey {
@@ -548,15 +552,15 @@ impl PublicKey {
         let mut public = String::new();
         file.read_to_string(&mut public)?;
         Ok(PublicKey {
-            keytype: typ,
-            keyval: PublicKeyValue { public },
+            key_type: typ,
+            key_val: PublicKeyValue { public },
         })
     }
 
     pub fn from_pubkey(typ: crypto::KeyType, public: &crypto::PubKeyValue) -> Result<Self> {
         Ok(PublicKey {
-            keytype: typ,
-            keyval: PublicKeyValue {
+            key_type: typ,
+            key_val: PublicKeyValue {
                 public: match typ {
                     crypto::KeyType::Ed25519 => HEXLOWER.encode(&*public),
                     crypto::KeyType::Rsa => String::from_utf8(public.to_vec())?,
@@ -573,13 +577,13 @@ pub struct PublicKeyValue {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PrivateKey {
-    keytype: crypto::KeyType,
-    keyval: PrivateKeyValue,
+    key_type: crypto::KeyType,
+    key_val: PrivateKeyValue,
 }
 
 impl PrivateKey {
     pub fn private_pem(&self) -> &str {
-        &self.keyval.private
+        &self.key_val.private
     }
 }
 

@@ -1,4 +1,7 @@
-#![recursion_limit = "1024"]
+//! A CLI tool for interacting with [OTA+](https://advancedtelematic.com/).
+
+// needed for `error_chain!`
+#![recursion_limit = "128"]
 
 extern crate chrono;
 extern crate curve25519_dalek;

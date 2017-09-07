@@ -1,3 +1,5 @@
+//! Provides an interface to CJSON (canonical json).
+
 use itoa;
 use json;
 use std::collections::BTreeMap;

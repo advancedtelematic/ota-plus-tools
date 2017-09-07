@@ -1,3 +1,5 @@
+//! Errors, helpers, and converters.
+
 use chrono;
 use data_encoding;
 use derp;
@@ -22,18 +24,22 @@ error_chain! {
     }
 
     errors {
+        /// There was a failure with a cryptographic operation.
         Crypto(s: String) {
             description("A cryptographic operation failed")
             display("{}", s)
         }
+        /// Data could not be en/decoded.
         Encoding(s: String) {
             description("Data could not be en/decoded")
             display("{}", s)
         }
+        /// An illegal argument was supplied to a function.
         IllegalArgument(s: String) {
             description("An illegal argument was supplied")
             display("Illegal argument: {}", s)
         }
+        /// An unexpected runtime error.
         Runtime(s: String) {
             description("A runtime error occurred")
             display("{}", s)

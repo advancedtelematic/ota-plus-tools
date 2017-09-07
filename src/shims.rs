@@ -1,3 +1,5 @@
+//! Shims to aid in ser/de operations.
+
 use chrono::offset::Utc;
 use chrono::prelude::*;
 use std::collections::HashMap;

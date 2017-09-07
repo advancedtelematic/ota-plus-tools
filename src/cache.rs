@@ -1,3 +1,5 @@
+//! Local cache of keys and metadata.
+
 use json;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -13,12 +15,14 @@ use error::{Error, ErrorKind, Result, ResultExt};
 use interchange::{DataInterchange, Json, InterchangeType};
 use tuf::{Metadata, Role, RootMetadata, TargetsMetadata, SignedMetadata};
 
+/// A local cache of configurations, keys, and metadata.
 pub struct Cache {
     path: PathBuf,
     config: Config,
 }
 
 impl Cache {
+    /// Create and initialize a new cache at the given path with the given `Config`.
     pub fn new<P: Into<PathBuf>>(path: P, config: Config) -> Result<Self> {
         let path = path.into();
         for subdir in &[
@@ -43,6 +47,8 @@ impl Cache {
         Ok(Cache { path, config })
     }
 
+    /// Attempt load the cache at the given path. Errors if the path doesn't exist or the config
+    /// can't be parsed (among other reasons).
     pub fn try_from<P: Into<PathBuf>>(path: P) -> Result<Self> {
         let path = path.into();
         let mut file = File::open(path.join("config.toml")).chain_err(
@@ -56,10 +62,12 @@ impl Cache {
         Ok(Cache { path, config })
     }
 
+    /// An immutable reference to the current config.
     pub fn config(&self) -> &Config {
         &self.config
     }
 
+    /// Sets (overwrites) the value of the signed root metadata.
     pub fn set_signed_root<I>(
         &self,
         signed: &SignedMetadata<I, RootMetadata>,
@@ -71,18 +79,22 @@ impl Cache {
         self.write_signed(self.metadata_path(Role::Root, true), signed, force)
     }
 
+    /// Sets (overwrites) the value of the unsigned root metadata.
     pub fn set_unsigned_root(&self, root: &RootMetadata, force: bool) -> Result<()> {
         self.write_metadata(self.metadata_path(Role::Root, false), root, force)
     }
 
+    /// Gets the signed root metadata.
     pub fn get_signed_root<I: DataInterchange>(&self) -> Result<SignedMetadata<I, RootMetadata>> {
         self.read_signed(Role::Root)
     }
 
+    /// Gets the unsigned root metadata.
     pub fn get_unsigned_root(&self) -> Result<RootMetadata> {
         self.read_unsigned(Role::Root)
     }
 
+    /// Sets (overwrites) the value of the signed targets metadata.
     pub fn set_signed_targets<I>(
         &self,
         signed: &SignedMetadata<I, TargetsMetadata>,
@@ -94,20 +106,24 @@ impl Cache {
         self.write_signed(self.metadata_path(Role::Targets, true), signed, force)
     }
 
+    /// Sets (overwrites) the value of the unsigned targets metadata.
     pub fn set_unsigned_targets(&self, targets: &TargetsMetadata, force: bool) -> Result<()> {
         self.write_metadata(self.metadata_path(Role::Targets, false), targets, force)
     }
 
+    /// Gets the signed targets metadata.
     pub fn get_signed_targets<I: DataInterchange>(
         &self,
     ) -> Result<SignedMetadata<I, TargetsMetadata>> {
         self.read_signed(Role::Targets)
     }
 
+    /// Gets the unsigned targets metadata.
     pub fn get_unsigned_targets(&self) -> Result<TargetsMetadata> {
         self.read_unsigned(Role::Targets)
     }
 
+    /// Adds the given key to the cache under the name `role`.
     pub fn add_key(&self, key: &KeyPair, role: Role) -> Result<()> {
         let path = self.path.join("keys").join(format!("{}", role));
         if path.exists() {
@@ -127,6 +143,7 @@ impl Cache {
         Ok(())
     }
 
+    /// Get the give with the name `role.`
     pub fn get_key(&self, role: Role) -> Result<KeyPair> {
         let path = self.path.join("keys").join(format!("{}", role));
         if !path.exists() {

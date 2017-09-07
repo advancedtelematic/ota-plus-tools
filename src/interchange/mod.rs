@@ -10,16 +10,19 @@ use std::io::{Read, Write};
 
 use error::Result;
 
+/// Enum of available interchange types.
 #[derive(Debug, PartialEq, Clone, Copy, Serialize, Deserialize)]
 pub enum InterchangeType {
+    /// Uses the `application/json` media type.
     #[serde(rename = "json")]
     Json,
 }
 
 impl InterchangeType {
+    /// The extension used by the given interchange.
     pub fn extension(&self) -> &'static str {
         match *self {
-            InterchangeType::Json => "json",
+            InterchangeType::Json => Json::extension(),
         }
     }
 }
@@ -29,6 +32,7 @@ pub trait DataInterchange: Debug + PartialEq + Clone {
     /// The type of data that is contained in the `signed` portion of metadata.
     type RawData: Serialize + DeserializeOwned + Clone + PartialEq;
 
+    /// The associated `InterchangeType`.
     fn typ() -> InterchangeType;
 
     /// The data interchange's extension.
@@ -70,8 +74,7 @@ impl DataInterchange for Json {
     type RawData = json::Value;
 
     /// ```
-    /// use ota_plus::interchange::{DataInterchange, Json};
-    ///
+    /// # use ota_plus::interchange::{DataInterchange, Json};
     /// assert_eq!(Json::extension(), "json");
     /// ```
     fn extension() -> &'static str {

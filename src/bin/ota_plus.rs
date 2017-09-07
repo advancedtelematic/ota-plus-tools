@@ -517,6 +517,8 @@ fn cmd_tuf_root_push(cache_path: PathBuf) -> Result<()> {
     check_status(&mut resp)
 }
 
+// TODO this doesn't help because it only rotates the root key which isn't always what we want
+// because we might want to keep the old key and use a new targets key for example
 fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     if !matches.is_present("confirm_dangerous_operation") {
         bail!(
@@ -531,6 +533,9 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
     let old_meta = Http::new(cache.config())?
         .get(&format!("{}/root", cache.config().app().tuf_url()))?
         .send()?;
+
+    // TODO this is unsafe because we don't know that this root is really what we want
+    // we'd need to do some TUF verification on it
     let mut meta: RootMetadata = json::from_reader(old_meta).chain_err(
         || "unable to read current root metadata",
     )?;
@@ -549,6 +554,7 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
         old_key
     };
 
+    // TODO this shouldn't generate a new key, we should have to manually specify which key we want
     // FIXME: non-rsa keys
     let new_pub_key = PublicKey::from_pubkey(KeyType::Rsa, new_key_pair.pub_key())
         .chain_err(|| "unable to get new root public key")?;
@@ -560,7 +566,7 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
 
     // WARNING: any errors after calling DELETE will probably screw the user account
 
-    let old_key_id = HEXLOWER.encode(&old_key.0);
+    let old_key_id = HEXLOWER.encode(&old_key);
     let mut deleted_key = Http::new(cache.config())?
         .delete(&format!(
             "{}/root/private_keys/{}",

@@ -1,3 +1,5 @@
+//! TUF metadata.
+
 use data_encoding::HEXLOWER;
 use chrono::DateTime;
 use chrono::offset::Utc;
@@ -74,6 +76,7 @@ pub struct SignedMetadata<D: DataInterchange, M: Metadata> {
 }
 
 impl<D: DataInterchange, M: Metadata> SignedMetadata<D, M> {
+    /// Create new signed metadata from a given piece of metadata and a private key.
     pub fn from(metadata: &M, key_pair: &KeyPair) -> Result<Self> {
         let data = D::serialize(metadata)?;
         let canonical = D::canonicalize(&data)?;
@@ -86,20 +89,23 @@ impl<D: DataInterchange, M: Metadata> SignedMetadata<D, M> {
         })
     }
 
+    /// An immutable reference to the metadata's signatures.
     pub fn signatures(&self) -> &[Signature] {
         &self.signatures
     }
 
+    /// A mutable reference to the metadata's signature.
     pub fn signatures_mut(&mut self) -> &mut Vec<Signature> {
         &mut self.signatures
     }
 
+    /// An immutable reference to the raw data that will be signed.
     pub fn signed(&self) -> &D::RawData {
         &self.signed
     }
 }
 
-
+/// Metadata for the root role.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RootMetadata {
     version: u32,
@@ -110,6 +116,7 @@ pub struct RootMetadata {
 }
 
 impl RootMetadata {
+    /// Create new root metadata (with validation).
     pub fn new(
         version: u32,
         expires: DateTime<Utc>,
@@ -133,34 +140,42 @@ impl RootMetadata {
         })
     }
 
+    /// The metadata's version.
     pub fn version(&self) -> u32 {
         self.version
     }
 
+    /// An immutable reference to when the metadata expires.
     pub fn expires(&self) -> &DateTime<Utc> {
         &self.expires
     }
 
+    /// An immutable reference to the map of all keys used by this metadata.
     pub fn keys(&self) -> &HashMap<KeyId, PublicKey> {
         &self.keys
     }
 
+    /// A mutable reference to the map of all keys used by this metadata.
     pub fn keys_mut(&mut self) -> &mut HashMap<KeyId, PublicKey> {
         &mut self.keys
     }
 
+    /// An immutable reference to the map of roles and their definitions.
     pub fn roles(&self) -> &HashMap<Role, RoleKeys> {
         &self.roles
     }
 
+    /// A mutable reference to the map of roles and their definitions.
     pub fn roles_mut(&mut self) -> &mut HashMap<Role, RoleKeys> {
         &mut self.roles
     }
 
+    /// Wheter this repo uses the consistent snapshot feature.
     pub fn consistent_snapshot(&self) -> bool {
         self.consistent_snapshot
     }
 
+    /// Add a key to the given role.
     pub fn add_key(&mut self, role: Role, keyid: KeyId, pubkey: PublicKey) -> Result<()> {
         if let Some(keys) = self.roles.get_mut(&role) {
             let _ = keys.keyids.insert(keyid.clone());
@@ -171,6 +186,7 @@ impl RootMetadata {
         Ok(())
     }
 
+    /// Remove a key from the role.
     pub fn remove_key(&mut self, role: Role, keyid: &KeyId) -> Result<()> {
         if let Some(keys) = self.roles.get_mut(&role) {
             let _ = keys.keyids.remove(keyid);
@@ -262,10 +278,12 @@ impl TargetsMetadata {
         &self.targets
     }
 
+    /// Add a target to the metadata.
     pub fn add_target(&mut self, path: TargetPath, description: TargetDescription) {
         let _ = self.targets.insert(path, description);
     }
 
+    /// Remove a target from the metadata.
     pub fn remove_target(&mut self, path: &TargetPath) {
         let _ = self.targets.remove(path);
     }
@@ -300,6 +318,7 @@ pub struct TargetPath(String);
 
 impl TargetPath {
     // TODO add sanitation rules to this
+    /// Create a new target path from the given string.
     pub fn new(path: String) -> Result<Self> {
         Ok(TargetPath(path))
     }
@@ -519,18 +538,21 @@ impl TargetCustom {
     }
 }
 
-
+/// The
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct RoleKeys {
+    // TODO needs custom ser/de to ensure deterministic ordering.
     keyids: HashSet<KeyId>,
     threshold: u32,
 }
 
 impl RoleKeys {
+    /// An immutable reference to the role's key IDs.
     pub fn keys(&self) -> &HashSet<KeyId> {
         &self.keyids
     }
 
+    /// A mutable reference to the role's key IDs.
     pub fn keys_mut(&mut self) -> &mut HashSet<KeyId> {
         &mut self.keyids
     }
@@ -539,6 +561,7 @@ impl RoleKeys {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 // TODO this needs a custom deserialize because it's possible that the key_type/key_val don't match
 // and we are currently doing no validatoin
+// TODO instead, just kill this because it belongs in `crypto`.
 pub struct PublicKey {
     #[serde(rename = "keytype")]
     key_type: crypto::KeyType,
@@ -547,6 +570,7 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
+    /// Read a public key of a given type from a file.
     pub fn from_file(typ: crypto::KeyType, path: &str) -> Result<Self> {
         let mut file = File::open(path)?;
         let mut public = String::new();
@@ -557,6 +581,8 @@ impl PublicKey {
         })
     }
 
+    /// Convert from a `PubKeyValue`.
+    // TODO this shouldn't exist, the type in `crypto` should handle this.
     pub fn from_pubkey(typ: crypto::KeyType, public: &crypto::PubKeyValue) -> Result<Self> {
         Ok(PublicKey {
             key_type: typ,
@@ -570,11 +596,14 @@ impl PublicKey {
     }
 }
 
+/// A public key's value.
+// TODO this shouldn't exist, the type in `crypto` should handle this.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PublicKeyValue {
     public: String,
 }
 
+// TODO this shouldn't exist, the type in `crypto` should handle this.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PrivateKey {
     key_type: crypto::KeyType,
@@ -587,6 +616,7 @@ impl PrivateKey {
     }
 }
 
+// TODO this shouldn't exist, the type in `crypto` should handle this.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PrivateKeyValue {
     private: String,

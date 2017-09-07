@@ -316,6 +316,14 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                         .multiple(true),
                 )
                 .arg(
+                    Arg::with_name("release-counter")
+                        .help("The Uptane release counter for the target")
+                        .long("relase-counter")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_natural_u32),
+                )
+                .arg(
                     Arg::with_name("force")
                         .help("Add the target even it already exists")
                         .short("f")
@@ -633,7 +641,18 @@ fn cmd_tuf_targets_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
         None => None,
         Some(vals) => Some(vals.map(String::from).collect::<Vec<_>>()),
     };
-    let custom = TargetCustom::new(name.into(), version.into(), Some(url.into()), ids);
+    let release_counter = matches
+        .value_of("release-counter")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let custom = TargetCustom::new(
+        name.into(),
+        version.into(),
+        Some(url.into()),
+        ids,
+        release_counter,
+    );
 
     let cache = get_cache(cache_path)?;
     let description = TargetDescription::new(length, hashes, Some(custom))?;

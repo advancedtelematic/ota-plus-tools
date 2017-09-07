@@ -515,6 +515,8 @@ pub struct TargetCustom {
     created_at: DateTime<Utc>,
     #[serde(rename = "updatedAt")]
     updated_at: DateTime<Utc>,
+    #[serde(rename = "releaseCounter")]
+    release_counter: u32,
 }
 
 impl TargetCustom {
@@ -524,6 +526,7 @@ impl TargetCustom {
         version: String,
         uri: Option<String>,
         hardware_ids: Option<Vec<String>>,
+        release_counter: u32,
     ) -> Self {
         let created_at = Utc::now();
         let updated_at = created_at.clone();
@@ -534,6 +537,7 @@ impl TargetCustom {
             hardware_ids,
             created_at,
             updated_at,
+            release_counter,
         }
     }
 }

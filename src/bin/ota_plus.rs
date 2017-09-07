@@ -309,14 +309,14 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                         .takes_value(true),
                 )
                 .arg(
-                    Arg::with_name("hardware-id")
+                    Arg::with_name("hardware_id")
                         .help("Restrict the target to specific hardware IDs")
-                        .long("hardware-id")
+                        .long("hardware_id")
                         .takes_value(true)
                         .multiple(true),
                 )
                 .arg(
-                    Arg::with_name("release-counter")
+                    Arg::with_name("release_counter")
                         .help("The Uptane release counter for the target")
                         .long("relase-counter")
                         .takes_value(true)
@@ -637,12 +637,12 @@ fn cmd_tuf_targets_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
     }
 
     let url = matches.value_of("url").unwrap();
-    let ids = match matches.values_of("hardware-id") {
+    let ids = match matches.values_of("hardware_id") {
         None => None,
         Some(vals) => Some(vals.map(String::from).collect::<Vec<_>>()),
     };
     let release_counter = matches
-        .value_of("release-counter")
+        .value_of("release_counter")
         .unwrap()
         .parse()
         .unwrap();

@@ -5,6 +5,7 @@ use chrono::DateTime;
 use chrono::offset::Utc;
 use serde::de::{Deserialize, Deserializer, DeserializeOwned, Error as DeserializeError};
 use serde::ser::{Serialize, Serializer, Error as SerializeError};
+use pem::{self, Pem};
 use std::collections::{HashSet, HashMap};
 use std::fmt::{self, Display, Debug};
 use std::fs::File;
@@ -593,7 +594,13 @@ impl PublicKey {
             key_val: PublicKeyValue {
                 public: match typ {
                     crypto::KeyType::Ed25519 => HEXLOWER.encode(&*public),
-                    crypto::KeyType::Rsa => String::from_utf8(public.to_vec())?,
+                    crypto::KeyType::Rsa => {
+                        let p = Pem {
+                            tag: "RSA PUBLIC KEY".into(),
+                            contents: public.to_vec(),
+                        };
+                        pem::encode(&p)
+                    }
                 },
             },
         })

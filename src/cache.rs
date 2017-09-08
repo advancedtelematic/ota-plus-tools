@@ -123,18 +123,18 @@ impl Cache {
         self.read_unsigned(Role::Targets)
     }
 
-    /// Adds the given key to the cache under the name `role`.
-    pub fn add_key(&self, key: &KeyPair, role: Role) -> Result<()> {
-        let path = self.path.join("keys").join(format!("{}", role));
+    /// Adds the given key to the cache under the name `name`
+    pub fn add_key(&self, key: &KeyPair, name: &str) -> Result<()> {
+        let path = self.path.join("keys").join(name);
         if path.exists() {
-            bail!(ErrorKind::Runtime(format!("{} key already exists", role)))
+            bail!(ErrorKind::Runtime(format!("{} key already exists", name)))
         }
         let mut file = File::create(&path).chain_err(|| {
             format!("Could not create path {:?}", path)
         })?;
         file.write_all(key.priv_key())?;
 
-        let path = self.path.join("keys").join(format!("{}.pub", role));
+        let path = self.path.join("keys").join(format!("{}.pub", name));
         let mut file = File::create(&path).chain_err(|| {
             format!("Could not create path {:?}", path)
         })?;
@@ -143,17 +143,16 @@ impl Cache {
         Ok(())
     }
 
-    /// Get the give with the name `role.`
-    pub fn get_key(&self, role: Role) -> Result<KeyPair> {
-        let path = self.path.join("keys").join(format!("{}", role));
+    /// Get the give with the name `name`
+    pub fn get_key(&self, name: &str) -> Result<KeyPair> {
+        let path = self.path.join("keys").join(name);
         if !path.exists() {
-            bail!(ErrorKind::Runtime(format!("{} key not found", role)))
+            bail!(ErrorKind::Runtime(format!("{} key not found", name)))
         }
         let mut file = File::open(path)?;
         let mut data = Vec::new();
         file.read_to_end(&mut data)?;
-        // FIXME: actual key_type
-        KeyPair::from(KeyType::Rsa, data)
+        KeyPair::from(data)
     }
 
     fn read_signed<I, M>(&self, role: Role) -> Result<SignedMetadata<I, M>>

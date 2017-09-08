@@ -7,6 +7,8 @@ extern crate error_chain;
 extern crate pem;
 extern crate ota_plus;
 extern crate serde_json as json;
+#[cfg(test)]
+extern crate tempdir;
 extern crate reqwest;
 
 use chrono::offset::Utc;
@@ -55,54 +57,60 @@ error_chain! {
 
 fn main() {
     env_logger::init().expect("start logger");
-
-    let matches = parser().get_matches();
-    let outcome = || -> Result<()> {
-        let cache = matches
-            .value_of("cache")
-            .map(PathBuf::from)
-            .or_else(|| env::home_dir().map(|path| path.join(".ota-plus")))
-            .ok_or_else(|| ErrorKind::IllegalArgument("Missing `path`.".into()))?;
-
-        match matches.subcommand() {
-            ("init", Some(sub)) => cmd_init(cache, sub),
-            ("keygen", Some(sub)) => cmd_keygen(cache, sub),
-            ("tuf", Some(sub)) => {
-                match sub.subcommand() {
-                    ("pushkey", Some(sub)) => cmd_tuf_pushkey(cache, sub),
-                    ("root", Some(sub)) => {
-                        match sub.subcommand() {
-                            ("parse", Some(sub)) => cmd_tuf_root_parse(cache, sub),
-                            ("add", Some(sub)) => cmd_tuf_root_add(cache, sub),
-                            ("remove", Some(sub)) => cmd_tuf_root_remove(cache, sub),
-                            ("sign", _) => cmd_tuf_root_sign(cache),
-                            ("push", _) => cmd_tuf_root_push(cache),
-                            ("rotate", Some(sub)) => cmd_tuf_root_rotate(cache, sub),
-                            _ => unreachable!(),
-                        }
-                    }
-                    ("targets", Some(sub)) => {
-                        match sub.subcommand() {
-                            ("init", Some(sub)) => cmd_tuf_targets_init(cache, sub),
-                            ("add", Some(sub)) => cmd_tuf_targets_add(cache, sub),
-                            ("remove", Some(sub)) => cmd_tuf_targets_remove(cache, sub),
-                            ("sign", _) => cmd_tuf_targets_sign(cache),
-                            ("push", _) => cmd_tuf_targets_push(cache),
-                            _ => unreachable!(),
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            _ => unreachable!(),
+    match run_main(parser().get_matches()) {
+        Ok(()) => (),
+        Err(e) => {
+            // TODO pretty print the error
+            writeln!(&mut io::stderr(), "{:?}", e).unwrap();
+            std::process::exit(1);
         }
-    }();
+    }
+}
 
-    outcome.unwrap_or_else(|err| {
-        // TODO pretty print the error
-        writeln!(&mut io::stderr(), "{:?}", err).unwrap();
-        std::process::exit(1);
-    })
+fn run_main(matches: ArgMatches) -> Result<()> {
+    let cache = matches
+        .value_of("cache")
+        .map(PathBuf::from)
+        .or_else(|| env::home_dir().map(|path| path.join(".ota-plus")))
+        .ok_or_else(|| ErrorKind::IllegalArgument("Missing `path`.".into()))?;
+
+    match matches.subcommand() {
+        ("init", Some(sub)) => cmd_init(cache, sub),
+        ("tuf", Some(sub)) => {
+            match sub.subcommand() {
+                ("key", Some(sub)) => {
+                    match sub.subcommand() {
+                        ("gen", Some(sub)) => cmd_tuf_key_gen(cache, sub),
+                        ("push", Some(sub)) => cmd_tuf_key_push(cache, sub),
+                        _ => unreachable!(),
+                    }
+                }
+                ("root", Some(sub)) => {
+                    match sub.subcommand() {
+                        ("parse", Some(sub)) => cmd_tuf_root_parse(cache, sub),
+                        ("add", Some(sub)) => cmd_tuf_root_add(cache, sub),
+                        ("remove", Some(sub)) => cmd_tuf_root_remove(cache, sub),
+                        ("sign", Some(sub)) => cmd_tuf_root_sign(cache, sub),
+                        ("push", _) => cmd_tuf_root_push(cache),
+                        ("rotate", Some(sub)) => cmd_tuf_root_rotate(cache, sub),
+                        _ => unreachable!(),
+                    }
+                }
+                ("targets", Some(sub)) => {
+                    match sub.subcommand() {
+                        ("init", Some(sub)) => cmd_tuf_targets_init(cache, sub),
+                        ("add", Some(sub)) => cmd_tuf_targets_add(cache, sub),
+                        ("remove", Some(sub)) => cmd_tuf_targets_remove(cache, sub),
+                        ("sign", Some(sub)) => cmd_tuf_targets_sign(cache, sub),
+                        ("push", _) => cmd_tuf_targets_push(cache),
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        _ => unreachable!(),
+    }
 }
 
 fn parser<'a, 'b>() -> App<'a, 'b> {
@@ -112,13 +120,13 @@ fn parser<'a, 'b>() -> App<'a, 'b> {
         .settings(&[AppSettings::SubcommandRequiredElseHelp])
         .arg(
             Arg::with_name("cache")
+                // TODO use #[cfg(...)] to change this to say `C:\\$user\.ota-plus` or whatever it
+                // is on windows
                 .help("The path of the local cache. Defaults to `~/.ota-plus`.")
                 .long("cache")
-                .takes_value(true)
-                .global(true),
+                .takes_value(true),
         )
         .subcommand(subcmd_init())
-        .subcommand(subcmd_keygen())
         .subcommand(subcmd_tuf())
 }
 
@@ -153,26 +161,31 @@ fn subcmd_init<'a, 'b>() -> App<'a, 'b> {
         )
 }
 
-fn subcmd_keygen<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("keygen")
-        .about(
-            "Generate private keys and print them as PKCS#8v2 DER to STDOUT",
-        )
-        .arg(arg_role())
-        .arg(arg_type())
-}
-
 fn subcmd_tuf<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("tuf")
         .about("Interact with a TUF repository")
         .settings(&[AppSettings::SubcommandRequiredElseHelp])
-        .subcommand(
-            SubCommand::with_name("pushkey")
-                .about("Push a new public key to the remote TUF repo")
-                .arg(arg_role()),
-        )
         .subcommand(subsubcmd_root())
         .subcommand(subsubcmd_targets())
+        .subcommand(subsubcmd_key())
+}
+
+fn subsubcmd_key<'a, 'b>() -> App<'a, 'b> {
+    SubCommand::with_name("key")
+        .about("Manage TUF signing keys")
+        .settings(&[AppSettings::SubcommandRequiredElseHelp])
+        .subcommand(
+            SubCommand::with_name("gen")
+                .about("Generate private keys as PKCS#8v2 DER")
+                .arg(arg_name())
+                .arg(arg_type()),
+        )
+        .subcommand(
+            SubCommand::with_name("push")
+                .about("Push a new public key to the remote TUF repo")
+                .arg(arg_name())
+                .arg(arg_role()),
+        )
 }
 
 fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
@@ -343,6 +356,13 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
         ))
 }
 
+fn arg_name<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name("name")
+        .short("n")
+        .long("name")
+        .required(true)
+        .takes_value(true)
+}
 
 fn arg_keyid<'a, 'b>() -> Arg<'a, 'b> {
     Arg::with_name("keyid")
@@ -380,6 +400,7 @@ fn arg_type<'a, 'b>() -> Arg<'a, 'b> {
         .takes_value(true)
         .required(true)
         .possible_values(&["ed25519", "rsa"])
+        .default_value("ed25519")
 }
 
 
@@ -449,21 +470,22 @@ fn cmd_init(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
         .map(|_| ())?)
 }
 
-fn cmd_keygen(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+fn cmd_tuf_key_gen(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
-    let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
+    let name = matches.value_of("name").unwrap();
     let typ = KeyType::from_str(&matches.value_of("type").unwrap())?;
     let key = KeyPair::new(typ)?;
-    Ok(cache.add_key(&key, role)?)
+    Ok(cache.add_key(&key, name)?)
 }
 
-fn cmd_tuf_pushkey(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+fn cmd_tuf_key_push(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
     let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
-    let key = cache.get_key(role)?;
+    let key_name = matches.value_of("name").unwrap();
+    let key = cache.get_key(key_name)?;
     let mut resp = Http::new(cache.config())?
         .put(&format!("{}/keys/{}", cache.config().app().tuf_url(), role))?
-        .json(&PublicKey::from_pubkey(KeyType::Rsa, key.pub_key())?)?
+        .json(&key.as_public_key()?)?
         .send()?;
     check_status(&mut resp)
 }
@@ -506,12 +528,13 @@ fn cmd_tuf_root_remove(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
     Ok(cache.set_unsigned_root(&root, true)?)
 }
 
-fn cmd_tuf_root_sign(cache_path: PathBuf) -> Result<()> {
+fn cmd_tuf_root_sign(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
     let root = cache.get_unsigned_root().chain_err(
         || "unable to open root.json",
     )?;
-    let key = cache.get_key(Role::Root).chain_err(|| "no root key found")?;
+    let key_name = matches.value_of("key").unwrap();
+    let key = cache.get_key(key_name).chain_err(|| "no root key found")?;
     let signed: SignedMetadata<Json, RootMetadata> = SignedMetadata::from(&root, &key)?;
     Ok(cache.set_signed_root(&signed, true)?)
 }
@@ -525,6 +548,7 @@ fn cmd_tuf_root_push(cache_path: PathBuf) -> Result<()> {
     check_status(&mut resp)
 }
 
+// TODO this logic should be in the Cache and not here
 // TODO this doesn't help because it only rotates the root key which isn't always what we want
 // because we might want to keep the old key and use a new targets key for example
 fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
@@ -533,8 +557,9 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
             "This is a destructive operation. The '--confirm-dangerous-operation' flag must be provided."
         );
     }
+    let key_name = matches.value_of("key").unwrap();
     let cache = get_cache(cache_path)?;
-    let new_key_pair = cache.get_key(Role::Root).chain_err(
+    let new_key_pair = cache.get_key(key_name).chain_err(
         || "no local root key found",
     )?;
 
@@ -589,7 +614,7 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
     let old_pem = pem::parse(old_key.private_pem()).chain_err(
         || "failed to parse old root private key as pem",
     )?;
-    let old_key_pair = KeyPair::from(KeyType::Rsa, old_pem.contents).chain_err(
+    let old_key_pair = KeyPair::from(old_pem.contents).chain_err(
         || "failed to parse key pair from old pem private role key",
     )?;
 
@@ -620,6 +645,7 @@ fn cmd_tuf_targets_init(cache_path: PathBuf, matches: &ArgMatches) -> Result<()>
     Ok(cache.set_unsigned_targets(&targets, force)?)
 }
 
+// TODO more of this logic should be in the cache and not here
 fn cmd_tuf_targets_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let path = TargetPath::new(matches.value_of("path").unwrap().into()).unwrap();
     let name = matches.value_of("name").unwrap();
@@ -672,9 +698,10 @@ fn cmd_tuf_targets_remove(cache_path: PathBuf, matches: &ArgMatches) -> Result<(
     Ok(cache.set_unsigned_targets(&targets, true)?)
 }
 
-fn cmd_tuf_targets_sign(cache_path: PathBuf) -> Result<()> {
+fn cmd_tuf_targets_sign(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
-    let key = cache.get_key(Role::Targets)?;
+    let key_name = matches.value_of("key").unwrap();
+    let key = cache.get_key(key_name)?;
     let targets = cache.get_unsigned_targets()?;
     let signed: SignedMetadata<Json, TargetsMetadata> = SignedMetadata::from(&targets, &key)?;
     Ok(cache.set_signed_targets(&signed, true)?)
@@ -689,7 +716,6 @@ fn cmd_tuf_targets_push(cache_path: PathBuf) -> Result<()> {
     check_status(&mut resp)
 }
 
-
 fn get_cache(cache_path: PathBuf) -> Result<Cache> {
     Cache::try_from(cache_path).chain_err(|| "Could not initialize the cache")
 }
@@ -699,6 +725,7 @@ fn check_status(resp: &mut Response) -> Result<()> {
         StatusCode::Ok | StatusCode::NoContent => Ok(()),
         status => {
             let mut data = Vec::new();
+            // TODO remove unwrap and just return the error
             resp.read_to_end(&mut data).unwrap();
             let body = String::from_utf8_lossy(&data);
             bail!(ErrorKind::Runtime(
@@ -707,7 +734,6 @@ fn check_status(resp: &mut Response) -> Result<()> {
         }
     }
 }
-
 
 enum Encoding {
     Hexlower,
@@ -737,13 +763,94 @@ impl FromStr for Encoding {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::path::Path;
+    use tempdir::TempDir;
+
+    fn tmp() -> TempDir {
+        TempDir::new("ota-plus").unwrap()
+    }
+
+    fn read<P: AsRef<Path>>(path: P) -> Vec<u8> {
+        let mut file = File::open(path).unwrap();
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).unwrap();
+        buf
+    }
 
     #[test]
     fn check_parser() {
         let _ = parser();
+    }
+
+    fn do_init(tmp: &TempDir) {
+        let parser = parser();
+        let client_id = "00000000-0000-0000-0000-000000000000";
+        let client_secret = "abc123";
+        let matches = parser
+            .get_matches_from_safe(
+                &[
+                    "ota-plus",
+                    "--cache",
+                    &tmp.path().to_string_lossy(),
+                    "init",
+                    "--client-id",
+                    client_id,
+                    "--client-secret",
+                    client_secret,
+                ],
+            )
+            .unwrap();
+        run_main(matches).unwrap();
+    }
+
+    #[test]
+    fn init() {
+        let tmp = tmp();
+        do_init(&tmp);
+    }
+
+
+    fn do_gen_key(typ: KeyType, type_str: &str) {
+        let tmp = tmp();
+        do_init(&tmp);
+
+        let key_name = "foo";
+        let parser = parser();
+        let matches = parser
+            .get_matches_from_safe(
+                &[
+                    "ota-plus",
+                    "--cache",
+                    &tmp.path().to_string_lossy(),
+                    "tuf",
+                    "key",
+                    "gen",
+                    "--type",
+                    type_str,
+                    "--name",
+                    key_name,
+                ],
+            )
+            .unwrap();
+        run_main(matches).unwrap();
+        let priv_key = read(tmp.path().join("keys").join(key_name));
+        let priv_key = KeyPair::from(priv_key).unwrap();
+        assert_eq!(priv_key.typ(), typ);
+
+        let pub_key = read(tmp.path().join("keys").join(format!("{}.pub", key_name)));
+        assert_eq!(&*pub_key, &**priv_key.pub_key());
+    }
+
+    #[test]
+    fn tuf_key_gen_ed25519() {
+        do_gen_key(KeyType::Ed25519, "ed25519")
+    }
+
+    #[test]
+    fn tuf_key_gen_rsa() {
+        do_gen_key(KeyType::Rsa, "rsa")
     }
 }

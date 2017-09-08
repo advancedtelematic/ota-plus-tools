@@ -10,6 +10,7 @@ extern crate derp;
 #[macro_use]
 extern crate error_chain;
 extern crate itoa;
+extern crate pem;
 extern crate reqwest;
 extern crate ring;
 extern crate serde;

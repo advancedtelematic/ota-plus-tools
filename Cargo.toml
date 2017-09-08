@@ -20,6 +20,7 @@ ring = { version = "0.11", features = ["rsa_signing"] }
 serde = "1"
 serde_derive = "1"
 serde_json = "1"
+tempdir = "0.3.5"
 tempfile = "2"
 toml = "0.4"
 untrusted = "0.5"

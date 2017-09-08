@@ -18,6 +18,7 @@ use std::sync::Arc;
 use untrusted;
 
 use error::{Error, ErrorKind, Result};
+use tuf;
 
 /// 1.2.840.10045.2.1 ecPublicKey (ANSI X9.62 public key type)
 const EC_PUBLIC_KEY_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
@@ -377,6 +378,16 @@ enum KeyPairInner {
     Rsa(Arc<RSAKeyPair>),
 }
 
+impl KeyPairInner {
+    fn typ(&self) -> KeyType {
+        match *self {
+            KeyPairInner::Ed25519(_) => KeyType::Ed25519,
+            KeyPairInner::Rsa(_) => KeyType::Rsa,
+        }
+    }
+}
+
+
 /// A public/privat key pair.
 pub struct KeyPair {
     inner: KeyPairInner,
@@ -434,12 +445,9 @@ impl KeyPair {
     }
 
     /// Initialize the `KeyPair` of a known type from the DER bytes of the private key.
-    pub fn from(typ: KeyType, priv_key: Vec<u8>) -> Result<Self> {
-        match typ {
-            KeyType::Ed25519 => {
-                let pair =
-                    Ed25519KeyPair::from_pkcs8(untrusted::Input::from(&priv_key))
-                        .map_err(|_| ErrorKind::Crypto("Failed to parse PKCS#8 bytes".into()))?;
+    pub fn from(priv_key: Vec<u8>) -> Result<Self> {
+        match Ed25519KeyPair::from_pkcs8(untrusted::Input::from(&priv_key)) {
+            Ok(pair) => {
                 let pub_key = wrap_ed25519_public_point(pair.public_key_bytes())?;
                 Ok(KeyPair {
                     inner: KeyPairInner::Ed25519(pair),
@@ -448,9 +456,23 @@ impl KeyPair {
                     priv_key: PrivKeyValue(priv_key),
                 })
             }
-
-            KeyType::Rsa => Self::rsa_from_priv(priv_key),
+            Err(e) => {
+                match Self::rsa_from_priv(priv_key) {
+                    Ok(key) => Ok(key),
+                    Err(e2) => {
+                        bail!(ErrorKind::Crypto(format!(
+                            "Failed to parse Ed25519: {:?}\nFailed to parse RSA: {:?}",
+                            e,
+                            e2
+                        )))
+                    }
+                }
+            }
         }
+    }
+
+    pub fn typ(&self) -> KeyType {
+        self.inner.typ()
     }
 
     /// An immutable reference to the public key's value.
@@ -466,6 +488,12 @@ impl KeyPair {
     /// An immutable reference to the key's ID.
     pub fn keyid(&self) -> &KeyId {
         &self.keyid
+    }
+
+    /// Clone the internal values to make this key into a serializable public key that the OTA+
+    /// backend understands.
+    pub fn as_public_key(&self) -> Result<tuf::PublicKey> {
+        tuf::PublicKey::from_pubkey(self.inner.typ(), self.pub_key())
     }
 
     /// Sign the given message with this key.
@@ -730,6 +758,12 @@ impl Deref for PrivKeyValue {
 #[derive(PartialEq)]
 pub struct PubKeyValue(Vec<u8>);
 
+impl Debug for PubKeyValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "PubKeyValue({})", BASE64.encode(&self.0))
+    }
+}
+
 impl Deref for PubKeyValue {
     type Target = [u8];
 
@@ -737,7 +771,6 @@ impl Deref for PubKeyValue {
         &self.0
     }
 }
-
 
 #[cfg(test)]
 mod test {

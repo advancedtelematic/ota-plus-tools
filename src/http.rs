@@ -67,16 +67,13 @@ impl<'c> Http<'c> {
             .chain_err(|| format!("Faile to POST to URL: {}", url))?;
 
         if resp.status() != StatusCode::Ok {
-            bail!(ErrorKind::Runtime(
-                format!(
+            bail!(ErrorKind::Runtime(format!(
                     "Bad status code {:?} for POST {}",
                     resp.status(),
                     url,
-                ),
-            ));
+                )));
         } else {
-            json::from_reader(resp)
-                .chain_err(|| "Failed to parse access token")
+            json::from_reader(resp).chain_err(|| "Failed to parse access token")
         }
     }
 }

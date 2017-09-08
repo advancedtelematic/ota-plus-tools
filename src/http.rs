@@ -5,7 +5,7 @@ use reqwest::{Client, IntoUrl, Method, RequestBuilder, StatusCode};
 use reqwest::header::{Authorization, Bearer, ContentType, Headers};
 
 use config::Config;
-use error::{Result, ErrorKind};
+use error::{Result, ErrorKind, ResultExt};
 
 
 /// An HTTP client.
@@ -50,24 +50,33 @@ impl<'c> Http<'c> {
         Ok(req)
     }
 
+    // TODO should consider caching token
     fn generate_token(&self) -> Result<AccessToken> {
         let mut headers = Headers::new();
         headers.set(ContentType::form_url_encoded());
 
+        let url = format!("{}/token", self.config.auth().token_url());
         let client_id = format!("{}", self.config.auth().client_id());
         let resp = self.client
-            .post(&format!("{}/token", self.config.auth().token_url()))?
+            .post(&url)
+            .chain_err(|| format!("Bad URL: {}", url))?
             .basic_auth(client_id, Some(self.config.auth().client_secret()))
             .headers(headers)
             .body("grant_type=client_credentials")
-            .send()?;
+            .send()
+            .chain_err(|| format!("Faile to POST to URL: {}", url))?;
 
         if resp.status() != StatusCode::Ok {
             bail!(ErrorKind::Runtime(
-                format!("Bad status code: {:?}", resp.status()),
+                format!(
+                    "Bad status code {:?} for POST {}",
+                    resp.status(),
+                    url,
+                ),
             ));
         } else {
-            json::from_reader(resp).map_err(|e| e.into())
+            json::from_reader(resp)
+                .chain_err(|| "Failed to parse access token")
         }
     }
 }

@@ -318,7 +318,7 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                 .arg(
                     Arg::with_name("release_counter")
                         .help("The Uptane release counter for the target")
-                        .long("relase-counter")
+                        .long("release-counter")
                         .takes_value(true)
                         .required(true)
                         .validator(is_natural_u32),

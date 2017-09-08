@@ -21,15 +21,16 @@ ota-plus init \
 
 2. Generate a new Targets signing key with:
 ```
-ota-plus keygen \
-  --role targets \
+ota-plus tuf key gen \
+  --name targets-01 \
   --type rsa
 ```
 
 3. Push the Targets public key to the remote TUF repository with:
 ```
-ota-plus tuf pushkey \
-  --role targets
+ota-plus tuf key push \
+  --role targets \
+  --name targets-01
 ```
 
 4. Initialize the `targets.json` metadata with:
@@ -52,7 +53,8 @@ ota-plus tuf targets add \
 
 6. Sign the `targets.json` metadata with:
 ```
-ota-plus tuf targets sign
+ota-plus tuf targets sign \
+  --key targets-01
 ```
 
 6. Push the `targets.json` metadata with:

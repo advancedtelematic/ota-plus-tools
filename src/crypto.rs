@@ -2,7 +2,7 @@
 
 use curve25519_dalek::curve::{CompressedEdwardsY, ExtendedPoint};
 use data_encoding::{BASE64, HEXLOWER};
-use derp::Der;
+use derp::{self, Der, Tag};
 use ring::digest::{self, SHA256, SHA512};
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, RSAKeyPair, RSASigningState, RSA_PSS_SHA256};
@@ -15,13 +15,20 @@ use std::ops::Deref;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::sync::Arc;
-use untrusted;
+use untrusted::Input;
 
 use error::{Error, ErrorKind, Result};
 use tuf;
 
+/// 1.2.840.113549.1.1.1 rsaEncryption(PKCS #1)
+const RSA_SPKI_OID: &'static [u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+
+/// 1.3.101.112 curveEd25519(EdDSA 25519 signature algorithm)
+const ED25519_SPKI_OID: &'static [u8] = &[0x2b, 0x65, 0x70];
+
 /// 1.2.840.10045.2.1 ecPublicKey (ANSI X9.62 public key type)
 const EC_PUBLIC_KEY_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+
 /// 1.2.840.10045.1.1 prime-field (ANSI X9.62 field type)
 const PRIME_FIELD_OID: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x01, 0x01];
 
@@ -357,6 +364,21 @@ pub enum KeyType {
     Rsa,
 }
 
+impl KeyType {
+    fn from_oid(oid: &[u8]) -> Result<Self> {
+        match oid {
+            x if x == RSA_SPKI_OID => Ok(KeyType::Rsa),
+            x if x == ED25519_SPKI_OID => Ok(KeyType::Ed25519),
+            x => {
+                bail!(format!(
+                    "Unknown OID: {}",
+                    x.iter().map(|b| format!("{:x}", b)).collect::<String>()
+                ))
+            }
+        }
+    }
+}
+
 impl FromStr for KeyType {
     type Err = Error;
 
@@ -391,7 +413,7 @@ impl KeyPairInner {
 /// A public/privat key pair.
 pub struct KeyPair {
     inner: KeyPairInner,
-    keyid: KeyId,
+    key_id: KeyId,
     priv_key: PrivKeyValue,
     pub_key: PubKeyValue,
 }
@@ -409,12 +431,12 @@ impl KeyPair {
                         ErrorKind::Crypto("Failed to generate Ed25519 key".into())
                     })?;
                 let pair =
-                    Ed25519KeyPair::from_pkcs8(untrusted::Input::from(&pkcs8_bytes))
+                    Ed25519KeyPair::from_pkcs8(Input::from(&pkcs8_bytes))
                         .map_err(|_| ErrorKind::Crypto("Failed to parse PKCS#8 bytes".into()))?;
                 let pub_key = wrap_ed25519_public_point(pair.public_key_bytes())?;
                 Ok(KeyPair {
                     inner: KeyPairInner::Ed25519(pair),
-                    keyid: KeyId::calculate(&pub_key),
+                    key_id: KeyId::calculate(&pub_key),
                     pub_key: PubKeyValue(pub_key),
                     priv_key: PrivKeyValue(pkcs8_bytes),
                 })
@@ -446,12 +468,12 @@ impl KeyPair {
 
     /// Initialize the `KeyPair` of a known type from the DER bytes of the private key.
     pub fn from(priv_key: Vec<u8>) -> Result<Self> {
-        match Ed25519KeyPair::from_pkcs8(untrusted::Input::from(&priv_key)) {
+        match Ed25519KeyPair::from_pkcs8(Input::from(&priv_key)) {
             Ok(pair) => {
                 let pub_key = wrap_ed25519_public_point(pair.public_key_bytes())?;
                 Ok(KeyPair {
                     inner: KeyPairInner::Ed25519(pair),
-                    keyid: KeyId::calculate(&pub_key),
+                    key_id: KeyId::calculate(&pub_key),
                     pub_key: PubKeyValue(pub_key),
                     priv_key: PrivKeyValue(priv_key),
                 })
@@ -486,8 +508,8 @@ impl KeyPair {
     }
 
     /// An immutable reference to the key's ID.
-    pub fn keyid(&self) -> &KeyId {
-        &self.keyid
+    pub fn key_id(&self) -> &KeyId {
+        &self.key_id
     }
 
     /// Clone the internal values to make this key into a serializable public key that the OTA+
@@ -520,17 +542,16 @@ impl KeyPair {
         };
 
         Ok(Signature {
-            keyid: self.keyid.clone(),
+            key_id: self.key_id.clone(),
             method: method,
             sig: sig,
         })
     }
 
     fn rsa_from_priv(priv_key: Vec<u8>) -> Result<Self> {
-        let pair = RSAKeyPair::from_der(untrusted::Input::from(&priv_key))
-            .map_err(|_| {
-                ErrorKind::Crypto("Could not parse DER RSA private key".into())
-            })?;
+        let pair = RSAKeyPair::from_der(Input::from(&priv_key)).map_err(|_| {
+            ErrorKind::Crypto("Could not parse DER RSA private key".into())
+        })?;
         if pair.public_modulus_len() < 256 {
             let len = pair.public_modulus_len() * 8;
             let err = format!("RSA public modulus must be >= 2048. Size: {}", len);
@@ -538,7 +559,7 @@ impl KeyPair {
         }
         Ok(KeyPair {
             inner: KeyPairInner::Rsa(Arc::new(pair)),
-            keyid: KeyId::calculate(&Self::rsa_get_pub(&priv_key, "DER")?),
+            key_id: KeyId::calculate(&Self::rsa_get_pub(&priv_key, "DER")?),
             pub_key: PubKeyValue(Self::rsa_get_pub(&priv_key, "PEM")?),
             priv_key: PrivKeyValue(priv_key),
         })
@@ -555,9 +576,6 @@ impl KeyPair {
         Ok(pub_key.wait_with_output()?.stdout)
     }
 }
-
-/// Wrapper around a public key's DER bytes.
-pub struct PublicKey(Vec<u8>);
 
 /// Wrapper type for the value of a cryptographic signature.
 pub struct SignatureValue(Vec<u8>);
@@ -666,15 +684,15 @@ impl<'de> Deserialize<'de> for KeyId {
 /// A structure that contains a `Signature` and associated data for verifying it.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Signature {
-    keyid: KeyId,
+    key_id: KeyId,
     method: SignatureMethod,
     sig: SignatureValue,
 }
 
 impl Signature {
     /// An immutable reference to the `KeyId` of the key that produced the signature.
-    pub fn keyid(&self) -> &KeyId {
-        &self.keyid
+    pub fn key_id(&self) -> &KeyId {
+        &self.key_id
     }
 
     /// An immutable reference to the `SignatureMethod` used to create this signature.
@@ -757,6 +775,30 @@ impl Deref for PrivKeyValue {
 /// Wrapper around the DER bytes of a public key.
 #[derive(PartialEq)]
 pub struct PubKeyValue(Vec<u8>);
+
+impl PubKeyValue {
+    pub fn from_spki(der_bytes: &[u8]) -> Result<(Self, KeyType)> {
+        let input = Input::from(der_bytes);
+
+        Ok(input.read_all(derp::Error::Read, |input| {
+            derp::nested(input, Tag::Sequence, |input| {
+                let typ = derp::nested(input, Tag::Sequence, |input| {
+                    let typ = derp::expect_tag_and_get_value(input, Tag::Oid)?;
+
+                    let typ = KeyType::from_oid(typ.as_slice_less_safe()).map_err(|_| {
+                        derp::Error::WrongValue
+                    })?;
+
+                    // for RSA / ed25519 this is null, so don't both parsing it
+                    let _ = derp::read_null(input)?;
+                    Ok(typ)
+                })?;
+                let value = derp::bit_string_with_no_unused_bits(input)?;
+                Ok((PubKeyValue(value.as_slice_less_safe().to_vec()), typ))
+            })
+        })?)
+    }
+}
 
 impl Debug for PubKeyValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

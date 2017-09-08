@@ -11,10 +11,11 @@ use std::fmt::{self, Display, Debug};
 use std::fs::File;
 use std::io::Read;
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::str::FromStr;
 
-use crypto::{self, HashAlgorithm, HashValue, KeyId, KeyPair, Signature};
-use error::{Error, Result, ErrorKind};
+use crypto::{self, HashAlgorithm, HashValue, KeyId, KeyPair, Signature, PubKeyValue};
+use error::{Error, Result, ErrorKind, ResultExt};
 use interchange::DataInterchange;
 use shims;
 
@@ -177,34 +178,34 @@ impl RootMetadata {
     }
 
     /// Add a key to the given role.
-    pub fn add_key(&mut self, role: Role, keyid: KeyId, pubkey: PublicKey) -> Result<()> {
+    pub fn add_key(&mut self, role: Role, key_id: KeyId, pubkey: PublicKey) -> Result<()> {
         if let Some(keys) = self.roles.get_mut(&role) {
-            let _ = keys.keyids.insert(keyid.clone());
+            let _ = keys.key_ids.insert(key_id.clone());
         } else {
             bail!(ErrorKind::IllegalArgument("role not found".into()));
         }
-        let _ = self.keys.insert(keyid, pubkey);
+        let _ = self.keys.insert(key_id, pubkey);
         Ok(())
     }
 
     /// Remove a key from the role.
-    pub fn remove_key(&mut self, role: Role, keyid: &KeyId) -> Result<()> {
+    pub fn remove_key(&mut self, role: Role, key_id: &KeyId) -> Result<()> {
         if let Some(keys) = self.roles.get_mut(&role) {
-            let _ = keys.keyids.remove(keyid);
+            let _ = keys.key_ids.remove(key_id);
         } else {
             bail!(ErrorKind::IllegalArgument("role not found".into()));
         }
 
         if self.roles
             .iter()
-            .filter(|&(_, def)| def.keyids.contains(keyid))
+            .filter(|&(_, def)| def.key_ids.contains(key_id))
             .collect::<Vec<_>>()
             .len() == 0
         {
-            let _ = self.keys.remove(keyid);
+            let _ = self.keys.remove(key_id);
         }
 
-        if let None = self.keys.remove(keyid) {
+        if let None = self.keys.remove(key_id) {
             bail!(ErrorKind::IllegalArgument("key not found".into()));
         }
         Ok(())
@@ -547,19 +548,20 @@ impl TargetCustom {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct RoleKeys {
     // TODO needs custom ser/de to ensure deterministic ordering.
-    keyids: HashSet<KeyId>,
+    #[serde(rename = "keyids")]
+    key_ids: HashSet<KeyId>,
     threshold: u32,
 }
 
 impl RoleKeys {
     /// An immutable reference to the role's key IDs.
-    pub fn keys(&self) -> &HashSet<KeyId> {
-        &self.keyids
+    pub fn key_ids(&self) -> &HashSet<KeyId> {
+        &self.key_ids
     }
 
     /// A mutable reference to the role's key IDs.
-    pub fn keys_mut(&mut self) -> &mut HashSet<KeyId> {
-        &mut self.keyids
+    pub fn key_ids_mut(&mut self) -> &mut HashSet<KeyId> {
+        &mut self.key_ids
     }
 }
 
@@ -575,15 +577,18 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
-    /// Read a public key of a given type from a file.
-    pub fn from_file(typ: crypto::KeyType, path: &str) -> Result<Self> {
-        let mut file = File::open(path)?;
-        let mut public = String::new();
-        file.read_to_string(&mut public)?;
-        Ok(PublicKey {
-            key_type: typ,
-            key_val: PublicKeyValue { public },
-        })
+    pub fn from_file<P: Into<PathBuf>>(path: P) -> Result<Self> {
+        let path = path.into();
+        let mut file = File::open(&path).chain_err(|| {
+            format!("Failed to open path {:?}", path)
+        })?;
+
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+
+        let (key_val, key_type) = PubKeyValue::from_spki(&mut buf)?;
+
+        PublicKey::from_pubkey(key_type.clone(), &key_val)
     }
 
     /// Convert from a `PubKeyValue`.

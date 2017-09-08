@@ -10,7 +10,7 @@ use tempfile::NamedTempFile;
 use toml;
 
 use config::Config;
-use crypto::{KeyPair, KeyType};
+use crypto::KeyPair;
 use error::{Error, ErrorKind, Result, ResultExt};
 use interchange::{DataInterchange, Json, InterchangeType};
 use tuf::{Metadata, Role, RootMetadata, TargetsMetadata, SignedMetadata};

@@ -87,7 +87,7 @@ fn run_main(matches: ArgMatches) -> Result<()> {
                 }
                 ("root", Some(sub)) => {
                     match sub.subcommand() {
-                        ("parse", Some(sub)) => cmd_tuf_root_parse(cache, sub),
+                        ("import", Some(sub)) => cmd_tuf_root_import(cache, sub),
                         ("add", Some(sub)) => cmd_tuf_root_add(cache, sub),
                         ("remove", Some(sub)) => cmd_tuf_root_remove(cache, sub),
                         ("sign", Some(sub)) => cmd_tuf_root_sign(cache, sub),
@@ -193,31 +193,28 @@ fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
         .about("Manipulate metadata for the `root` role")
         .settings(&[AppSettings::SubcommandRequiredElseHelp])
         .subcommand(
-            SubCommand::with_name("parse")
-                .about("Parse an existing root.json")
+            SubCommand::with_name("import")
+                .about("Import an existing root.json")
                 .arg(arg_path()),
         )
         .subcommand(
             SubCommand::with_name("add")
                 .about("Add a key to the root metadata")
                 .arg(arg_role())
-                .arg(arg_keyid())
-                .arg(arg_type())
                 .arg(
-                    Arg::with_name("pem_file")
-                        .help("Path to the PEM encoded public key")
+                    Arg::with_name("path")
+                        .help("Path to the public key")
                         .short("p")
-                        .long("pem-file")
+                        .long("path")
                         .required(true)
-                        .takes_value(true)
-                        .validator(is_pem_public),
+                        .takes_value(true),
                 ),
         )
         .subcommand(
             SubCommand::with_name("remove")
                 .about("Remove a key from the root metadata")
                 .arg(arg_role())
-                .arg(arg_keyid()),
+                .arg(arg_key_id()),
         )
         .subcommand(SubCommand::with_name("sign").about(
             "Sign the root metadata",
@@ -364,11 +361,11 @@ fn arg_name<'a, 'b>() -> Arg<'a, 'b> {
         .takes_value(true)
 }
 
-fn arg_keyid<'a, 'b>() -> Arg<'a, 'b> {
-    Arg::with_name("keyid")
+fn arg_key_id<'a, 'b>() -> Arg<'a, 'b> {
+    Arg::with_name("key_id")
         .help("The key ID")
         .short("i")
-        .long("keyid")
+        .long("key-id")
         .required(true)
         .takes_value(true)
         .validator(is_key_id)
@@ -413,19 +410,6 @@ fn is_key_id(s: String) -> ::std::result::Result<(), String> {
         } else {
             Ok(())
         })
-}
-
-fn is_pem_public(s: String) -> ::std::result::Result<(), String> {
-    let mut file = File::open(s).map_err(
-        |e| format!("error opening pem file: {}", e),
-    )?;
-    let mut text = String::new();
-    file.read_to_string(&mut text).map_err(|e| {
-        format!("error reading pem file: {}", e)
-    })?;
-    pem::parse(text).map(|_| ()).map_err(|e| {
-        format!("invalid pem key: {}", e)
-    })
 }
 
 fn is_positive_u64(s: String) -> ::std::result::Result<(), String> {
@@ -490,11 +474,14 @@ fn cmd_tuf_key_push(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     check_status(&mut resp)
 }
 
-fn cmd_tuf_root_parse(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+fn cmd_tuf_root_import(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
     let path = matches.value_of("path").unwrap();
     let force = matches.is_present("force");
-    let file = File::open(path).chain_err(|| "unable to open file")?;
+    let file = File::open(path).chain_err(
+        || format!("Unable to open file {:?}", path),
+    )?;
+    // TODO this is hardcoded importing JSON only
     let signed: SignedMetadata<Json, RootMetadata> = json::from_reader(file).chain_err(
         || "unable to parse root.json",
     )?;
@@ -510,10 +497,9 @@ fn cmd_tuf_root_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
         || "unable to open root.json",
     )?;
     let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
-    let keyid = KeyId::from_string(matches.value_of("keyid").unwrap()).unwrap();
-    let typ = KeyType::from_str(&matches.value_of("type").unwrap())?;
-    let pubkey = PublicKey::from_file(typ, matches.value_of("pem_file").unwrap())?;
-    root.add_key(role, keyid, pubkey)?;
+    let key_id = KeyId::from_string(matches.value_of("key_id").unwrap()).unwrap();
+    let pubkey = PublicKey::from_file(matches.value_of("path").unwrap())?;
+    root.add_key(role, key_id, pubkey)?;
     Ok(cache.set_unsigned_root(&root, true)?)
 }
 
@@ -523,8 +509,8 @@ fn cmd_tuf_root_remove(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
         || "unable to open root.json",
     )?;
     let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
-    let keyid = KeyId::from_string(matches.value_of("keyid").unwrap()).unwrap();
-    root.remove_key(role, &keyid)?;
+    let key_id = KeyId::from_string(matches.value_of("key_id").unwrap()).unwrap();
+    root.remove_key(role, &key_id)?;
     Ok(cache.set_unsigned_root(&root, true)?)
 }
 
@@ -576,14 +562,14 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
         let role_keys = meta.roles_mut().get_mut(&Role::Root).ok_or_else(|| {
             ErrorKind::Runtime("no current root keys".into())
         })?;
-        if role_keys.keys().len() != 1 {
+        if role_keys.key_ids().len() != 1 {
             bail!(format!(
                 "expected 1 role key ID, found {}",
-                role_keys.keys().len()
+                role_keys.key_ids().len()
             ));
         }
-        let old_key = role_keys.keys_mut().drain().last().expect("old_key");
-        role_keys.keys_mut().insert(new_key_pair.keyid().clone());
+        let old_key = role_keys.key_ids_mut().drain().last().expect("old_key");
+        role_keys.key_ids_mut().insert(new_key_pair.key_id().clone());
         old_key
     };
 
@@ -593,7 +579,7 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
         .chain_err(|| "unable to get new root public key")?;
     let _ = meta.keys_mut().remove(&old_key);
     let _ = meta.keys_mut().insert(
-        new_key_pair.keyid().clone(),
+        new_key_pair.key_id().clone(),
         new_pub_key,
     );
 

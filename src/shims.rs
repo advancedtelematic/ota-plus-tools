@@ -27,7 +27,7 @@ fn format_datetime(ts: &DateTime<Utc>) -> String {
 #[derive(Serialize, Deserialize)]
 pub struct RootMetadata {
     #[serde(rename = "_type")]
-    typ: tuf::Role,
+    typ: String,
     version: u32,
     expires: String,
     keys: HashMap<crypto::KeyId, tuf::PublicKey>,
@@ -38,7 +38,7 @@ pub struct RootMetadata {
 impl RootMetadata {
     pub fn from(tuf: &tuf::RootMetadata) -> Result<Self> {
         Ok(RootMetadata {
-            typ: tuf::Role::Root,
+            typ: "Root".into(),
             version: tuf.version(),
             expires: format_datetime(&tuf.expires()),
             keys: tuf.keys().clone(),
@@ -48,7 +48,7 @@ impl RootMetadata {
     }
 
     pub fn try_into(self) -> Result<tuf::RootMetadata> {
-        if self.typ != tuf::Role::Root {
+        if self.typ != "Root".to_string() {
             let msg = format!(
                 "Attempted to decode root metadata labeled as {:?}",
                 self.typ
@@ -70,7 +70,7 @@ impl RootMetadata {
 #[derive(Serialize, Deserialize)]
 pub struct TargetsMetadata {
     #[serde(rename = "_type")]
-    typ: tuf::Role,
+    typ: String,
     version: u32,
     expires: String,
     targets: HashMap<tuf::TargetPath, tuf::TargetDescription>,
@@ -79,7 +79,7 @@ pub struct TargetsMetadata {
 impl TargetsMetadata {
     pub fn from(tuf: &tuf::TargetsMetadata) -> Result<Self> {
         Ok(TargetsMetadata {
-            typ: tuf::Role::Targets,
+            typ: "Targets".into(),
             version: tuf.version(),
             expires: format_datetime(&tuf.expires()),
             targets: tuf.targets().clone(),
@@ -87,7 +87,7 @@ impl TargetsMetadata {
     }
 
     pub fn try_into(self) -> Result<tuf::TargetsMetadata> {
-        if self.typ != tuf::Role::Targets {
+        if self.typ != "Targets".to_string() {
             let msg = format!(
                 "Attempted to decode targets metadata labeled as {:?}",
                 self.typ

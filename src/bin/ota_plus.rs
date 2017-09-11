@@ -636,12 +636,6 @@ fn cmd_tuf_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
         let role_keys = meta.roles_mut().get_mut(&Role::Targets).ok_or_else(|| {
             Error::from_kind(ErrorKind::Runtime("no current root keys".into()))
         })?;
-        if role_keys.key_ids().len() != 1 {
-            bail!(format!(
-                "expected 1 role key ID, found {}",
-                role_keys.key_ids().len()
-            ));
-        }
         let ids = role_keys.key_ids_mut();
         ids.clear();
         ids.insert(new_targets.key_id().clone());

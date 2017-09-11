@@ -173,11 +173,6 @@ fn subcmd_tuf<'a, 'b>() -> App<'a, 'b> {
                 .about("Rotate the root metadata to offline mode. WARNING: May break you account.")
                 .settings(&[AppSettings::ArgRequiredElseHelp])
                 .arg(
-                    Arg::with_name("confirm_dangerous_operation")
-                        .help("Confirm you know what you are doing")
-                        .long("confirm-dangerous-operation"),
-                )
-                .arg(
                     Arg::with_name("new_root_key_name")
                         .help("The name of the new root key to be used for the new root metadata")
                         .long("new-root-key-name")
@@ -596,12 +591,6 @@ fn cmd_tuf_root_push(cache_path: PathBuf) -> Result<()> {
 }
 
 fn cmd_tuf_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
-    if !matches.is_present("confirm_dangerous_operation") {
-        bail!(
-            "This is a destructive operation. The '--confirm-dangerous-operation' flag must be provided."
-        );
-    }
-
     let new_root = matches.value_of("new_root_key_name").unwrap();
     let old_root = matches.value_of("previous_key_alias").unwrap();
     let new_targets = matches.value_of("new_targets_key_name").unwrap();

@@ -684,6 +684,7 @@ impl<'de> Deserialize<'de> for KeyId {
 /// A structure that contains a `Signature` and associated data for verifying it.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Signature {
+    #[serde(rename = "keyid")]
     key_id: KeyId,
     method: SignatureMethod,
     sig: SignatureValue,

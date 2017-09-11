@@ -559,15 +559,15 @@ impl KeyPair {
         }
         Ok(KeyPair {
             inner: KeyPairInner::Rsa(Arc::new(pair)),
-            key_id: KeyId::calculate(&Self::rsa_get_pub(&priv_key, "DER")?),
-            pub_key: PubKeyValue(Self::rsa_get_pub(&priv_key, "PEM")?),
+            key_id: KeyId::calculate(&Self::rsa_get_pub(&priv_key)?),
+            pub_key: PubKeyValue(Self::rsa_get_pub(&priv_key)?),
             priv_key: PrivKeyValue(priv_key),
         })
     }
 
-    fn rsa_get_pub(priv_key: &[u8], outform: &str) -> Result<Vec<u8>> {
+    fn rsa_get_pub(priv_key: &[u8]) -> Result<Vec<u8>> {
         let mut pub_key = Command::new("openssl")
-            .args(&["rsa", "-inform", "DER", "-pubout", "-outform", outform])
+            .args(&["rsa", "-inform", "der", "-pubout", "-outform", "der"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

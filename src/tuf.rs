@@ -601,10 +601,10 @@ impl PublicKey {
                     crypto::KeyType::Ed25519 => HEXLOWER.encode(&*public),
                     crypto::KeyType::Rsa => {
                         let p = Pem {
-                            tag: "RSA PUBLIC KEY".into(),
+                            tag: "PUBLIC KEY".into(),
                             contents: public.to_vec(),
                         };
-                        pem::encode(&p)
+                        pem::encode(&p).replace("\r", "")
                     }
                 },
             },

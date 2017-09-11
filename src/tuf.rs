@@ -23,12 +23,16 @@ use shims;
 #[derive(Debug, PartialEq, Serialize, Deserialize, Hash, Eq, Clone, Copy)]
 pub enum Role {
     /// The root role.
+    #[serde(rename = "root")]
     Root,
     /// The snapshot role.
+    #[serde(rename = "snapshot")]
     Snapshot,
     /// The targets role.
+    #[serde(rename = "targets")]
     Targets,
     /// The timestamp role.
+    #[serde(rename = "timestamp")]
     Timestamp,
 }
 

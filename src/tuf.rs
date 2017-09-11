@@ -630,7 +630,9 @@ pub struct PublicKeyValue {
 // TODO this shouldn't exist, the type in `crypto` should handle this.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PrivateKey {
+    #[serde(rename = "keytype")]
     key_type: crypto::KeyType,
+    #[serde(rename = "keyval")]
     key_val: PrivateKeyValue,
 }
 

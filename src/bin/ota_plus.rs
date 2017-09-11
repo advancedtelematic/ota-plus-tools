@@ -87,6 +87,7 @@ fn run_main(matches: ArgMatches) -> Result<()> {
                 }
                 ("root", Some(sub)) => {
                     match sub.subcommand() {
+                        ("init", Some(sub)) => cmd_tuf_root_init(cache, sub),
                         ("import", Some(sub)) => cmd_tuf_root_import(cache, sub),
                         ("add", Some(sub)) => cmd_tuf_root_add(cache, sub),
                         ("remove", Some(sub)) => cmd_tuf_root_remove(cache, sub),
@@ -232,6 +233,39 @@ fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
                         .long("confirm-dangerous-operation"),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("init")
+                .about("Create new, blank root metadata")
+                .arg(
+                    Arg::with_name("version")
+                        .help("The initial root version")
+                        .short("v")
+                        .long("version")
+                        .takes_value(true)
+                        .required(true)
+                        .validator(is_natural_u32)
+                )
+                .arg(
+                    Arg::with_name("consistent_snapshot")
+                        .help("Set the `consistent_snapshot` flag to true")
+                        .long("consistent-snapshot")
+                )
+                .arg(
+                    Arg::with_name("expires")
+                        .help("Set the metadata's expiration date")
+                        .short("e")
+                        .long("expires")
+                        .required(true)
+                        .takes_value(true)
+                        .validator(is_datetime)
+                )
+                .arg(
+                    Arg::with_name("force")
+                        .help("Create the `root` metadata even it already exists")
+                        .short("f")
+                        .long("force"),
+                )
+            )
 }
 
 fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
@@ -431,7 +465,7 @@ fn is_natural_u32(s: String) -> ::std::result::Result<(), String> {
 fn is_datetime(s: String) -> ::std::result::Result<(), String> {
     Utc.datetime_from_str(&s, "%FT%TZ").map(|_| ()).map_err(
         |e| {
-            format!("invalid date: {:?}", e)
+            format!("invalid date {:?} : {:?}", s, e)
         },
     )
 }
@@ -702,6 +736,18 @@ fn cmd_tuf_targets_push(cache_path: PathBuf) -> Result<()> {
     check_status(&mut resp)
 }
 
+fn cmd_tuf_root_init(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+    let version = matches.value_of("version").unwrap().parse().unwrap();
+    let consistent_snapshot = matches.is_present("consistent_snapshot");
+    let expires = matches.value_of("expires").unwrap();
+    let expires = Utc.datetime_from_str(expires, "%FT%TZ").unwrap();
+    let force = matches.is_present("force");
+    let cache = get_cache(cache_path)?;
+    let root = RootMetadata::new(version, expires, HashMap::new(), HashMap::new(), consistent_snapshot)?;
+    cache.set_unsigned_root(&root, force)?;
+    Ok(())
+}
+
 fn get_cache(cache_path: PathBuf) -> Result<Cache> {
     Cache::try_from(cache_path).chain_err(|| "Could not initialize the cache")
 }
@@ -838,5 +884,39 @@ mod test {
     #[test]
     fn tuf_key_gen_rsa() {
         do_gen_key(KeyType::Rsa, "rsa")
+    }
+
+    #[test]
+    fn tuf_root_init() {
+        let version = 1;
+        let expires = Utc.ymd(2017, 1, 1).and_hms(0, 0, 0);
+        let expires_str = &format!("{}", expires.format("%FT%TZ"));
+
+        let tmp = tmp();
+        do_init(&tmp);
+        let parser = parser();
+        let matches = parser
+            .get_matches_from_safe(
+                &[
+                    "ota-plus",
+                    "--cache",
+                    &tmp.path().to_string_lossy(),
+                    "tuf",
+                    "root",
+                    "init",
+                    "--expires",
+                    expires_str,
+                    "--version",
+                    &version.to_string()
+                ],
+            )
+            .unwrap();
+        run_main(matches).unwrap();
+
+        let root_path = tmp.path().join("metadata").join("unsigned").join("root.json");
+        let root = read(root_path);
+        let root: RootMetadata = json::from_slice(&root).unwrap();
+        let expected = RootMetadata::new(1, expires, HashMap::new(), HashMap::new(), false).unwrap();
+        assert_eq!(root, expected);
     }
 }

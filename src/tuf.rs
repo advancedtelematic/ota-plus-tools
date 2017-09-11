@@ -91,6 +91,14 @@ impl<D: DataInterchange, M: Metadata> SignedMetadata<D, M> {
         })
     }
 
+    pub fn add_signature(&mut self, key_pair: &KeyPair) -> Result<()> {
+        let data = D::serialize(&self.signed)?;
+        let canonical = D::canonicalize(&data)?;
+        let sig = key_pair.sign(&canonical)?;
+        self.signatures.push(sig);
+        Ok(())
+    }
+
     /// An immutable reference to the metadata's signatures.
     pub fn signatures(&self) -> &[Signature] {
         &self.signatures
@@ -629,6 +637,11 @@ pub struct PrivateKey {
 impl PrivateKey {
     pub fn private_pem(&self) -> &str {
         &self.key_val.private
+    }
+
+    pub fn as_key_pair(&self) -> Result<KeyPair> {
+        let parsed = pem::parse(&self.key_val.private)?;
+        Ok(KeyPair::from(parsed.contents)?)
     }
 }
 

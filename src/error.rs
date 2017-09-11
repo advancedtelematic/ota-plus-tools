@@ -4,6 +4,7 @@ use chrono;
 use data_encoding;
 use derp;
 use json;
+use pem;
 use reqwest;
 use std;
 use tempfile;
@@ -17,6 +18,7 @@ error_chain! {
         Http(reqwest::Error);
         Io(std::io::Error);
         Json(json::Error);
+        Pem(pem::Error);
         TempfilePersist(tempfile::PersistError);
         TomlDeserialize(toml::de::Error);
         TomlSerialize(toml::ser::Error);

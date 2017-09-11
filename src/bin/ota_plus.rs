@@ -4,7 +4,6 @@ extern crate data_encoding;
 extern crate env_logger;
 #[macro_use]
 extern crate error_chain;
-extern crate pem;
 extern crate ota_plus;
 extern crate serde_json as json;
 #[cfg(test)]
@@ -93,7 +92,6 @@ fn run_main(matches: ArgMatches) -> Result<()> {
                         ("remove", Some(sub)) => cmd_tuf_root_remove(cache, sub),
                         ("sign", Some(sub)) => cmd_tuf_root_sign(cache, sub),
                         ("push", _) => cmd_tuf_root_push(cache),
-                        ("rotate", Some(sub)) => cmd_tuf_root_rotate(cache, sub),
                         _ => unreachable!(),
                     }
                 }
@@ -107,6 +105,7 @@ fn run_main(matches: ArgMatches) -> Result<()> {
                         _ => unreachable!(),
                     }
                 }
+                ("rotate-root-to-offline-key", Some(sub)) => cmd_tuf_rotate(cache, sub),
                 _ => unreachable!(),
             }
         }
@@ -169,6 +168,37 @@ fn subcmd_tuf<'a, 'b>() -> App<'a, 'b> {
         .subcommand(subsubcmd_root())
         .subcommand(subsubcmd_targets())
         .subcommand(subsubcmd_key())
+        .subcommand(
+            SubCommand::with_name("rotate-root-to-offline-key")
+                .about("Rotate the root metadata to offline mode. WARNING: May break you account.")
+                .settings(&[AppSettings::ArgRequiredElseHelp])
+                .arg(
+                    Arg::with_name("confirm_dangerous_operation")
+                        .help("Confirm you know what you are doing")
+                        .long("confirm-dangerous-operation"),
+                )
+                .arg(
+                    Arg::with_name("new_root_key_name")
+                        .help("The name of the new root key to be used for the new root metadata")
+                        .long("new-root-key-name")
+                        .takes_value(true)
+                        .required(true)
+                )
+                .arg(
+                    Arg::with_name("new_targets_key_name")
+                        .help("The name of the new targets key to be used for the new targets metadata")
+                        .long("new-targets-key-name")
+                        .takes_value(true)
+                        .required(true)
+                )
+                .arg(
+                    Arg::with_name("previous_key_alias")
+                        .help("The name of the old root (used for saving after download")
+                        .long("previous-key-alias")
+                        .takes_value(true)
+                        .required(true)
+                )
+        )
 }
 
 fn subsubcmd_key<'a, 'b>() -> App<'a, 'b> {
@@ -224,16 +254,6 @@ fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
             "Push the signed root metadata to the TUF repo",
         ))
         .subcommand(
-            SubCommand::with_name("rotate")
-                .about("Replace the old root signing key with a new one")
-                .settings(&[AppSettings::ArgRequiredElseHelp])
-                .arg(
-                    Arg::with_name("confirm_dangerous_operation")
-                        .help("Confirm you know what you are doing")
-                        .long("confirm-dangerous-operation"),
-                ),
-        )
-        .subcommand(
             SubCommand::with_name("init")
                 .about("Create new, blank root metadata")
                 .arg(
@@ -243,12 +263,12 @@ fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
                         .long("version")
                         .takes_value(true)
                         .required(true)
-                        .validator(is_natural_u32)
+                        .validator(is_natural_u32),
                 )
                 .arg(
                     Arg::with_name("consistent_snapshot")
                         .help("Set the `consistent_snapshot` flag to true")
-                        .long("consistent-snapshot")
+                        .long("consistent-snapshot"),
                 )
                 .arg(
                     Arg::with_name("expires")
@@ -257,15 +277,15 @@ fn subsubcmd_root<'a, 'b>() -> App<'a, 'b> {
                         .long("expires")
                         .required(true)
                         .takes_value(true)
-                        .validator(is_datetime)
+                        .validator(is_datetime),
                 )
                 .arg(
                     Arg::with_name("force")
                         .help("Create the `root` metadata even it already exists")
                         .short("f")
                         .long("force"),
-                )
-            )
+                ),
+        )
 }
 
 fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
@@ -301,7 +321,6 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
         .subcommand(
             SubCommand::with_name("add")
                 .about("Add a target to the staged metadata")
-                .arg(arg_path())
                 .arg(
                     Arg::with_name("name")
                         .help("The target name")
@@ -355,7 +374,7 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                 .arg(
                     Arg::with_name("hardware_id")
                         .help("Restrict the target to specific hardware IDs")
-                        .long("hardware_id")
+                        .long("hardware-id")
                         .takes_value(true)
                         .multiple(true),
                 )
@@ -379,9 +398,17 @@ fn subsubcmd_targets<'a, 'b>() -> App<'a, 'b> {
                 .about("Remove a target from the staged metadata")
                 .arg(arg_path()),
         )
-        .subcommand(SubCommand::with_name("sign").about(
-            "Sign the targets metadata",
-        ))
+        .subcommand(
+            SubCommand::with_name("sign")
+                .about("Sign the targets metadata")
+                .arg(
+                    Arg::with_name("key_name")
+                        .long("key-name")
+                        .help("The name of the key used for signing")
+                        .required(true)
+                        .takes_value(true),
+                ),
+        )
         .subcommand(SubCommand::with_name("push").about(
             "Push the signed targets metadata to the TUF repo",
         ))
@@ -499,7 +526,7 @@ fn cmd_tuf_key_gen(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
 fn cmd_tuf_key_push(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
     let role = matches.value_of("role").unwrap().parse::<Role>().unwrap();
-    let key_name = matches.value_of("name").unwrap();
+    let key_name = matches.value_of("key_name").unwrap();
     let key = cache.get_key(key_name)?;
     let mut resp = Http::new(cache.config())?
         .put(&format!("{}/keys/{}", cache.config().app().tuf_url(), role))?
@@ -568,19 +595,24 @@ fn cmd_tuf_root_push(cache_path: PathBuf) -> Result<()> {
     check_status(&mut resp)
 }
 
-// TODO this logic should be in the Cache and not here
-// TODO this doesn't help because it only rotates the root key which isn't always what we want
-// because we might want to keep the old key and use a new targets key for example
-fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
+fn cmd_tuf_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     if !matches.is_present("confirm_dangerous_operation") {
         bail!(
             "This is a destructive operation. The '--confirm-dangerous-operation' flag must be provided."
         );
     }
-    let key_name = matches.value_of("key").unwrap();
+
+    let new_root = matches.value_of("new_root_key_name").unwrap();
+    let old_root = matches.value_of("previous_key_alias").unwrap();
+    let new_targets = matches.value_of("new_targets_key_name").unwrap();
+
     let cache = get_cache(cache_path)?;
-    let new_key_pair = cache.get_key(key_name).chain_err(
+
+    let new_root = cache.get_key(new_root).chain_err(
         || "no local root key found",
+    )?;
+    let new_targets = cache.get_key(new_targets).chain_err(
+        || "no local targets get found",
     )?;
 
     let old_meta = Http::new(cache.config())?
@@ -592,9 +624,10 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
     let mut meta: RootMetadata = json::from_reader(old_meta).chain_err(
         || "unable to read current root metadata",
     )?;
-    let old_key = {
+
+    let old_key_id = {
         let role_keys = meta.roles_mut().get_mut(&Role::Root).ok_or_else(|| {
-            ErrorKind::Runtime("no current root keys".into())
+            Error::from_kind(ErrorKind::Runtime("no current root keys".into()))
         })?;
         if role_keys.key_ids().len() != 1 {
             bail!(format!(
@@ -602,24 +635,38 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
                 role_keys.key_ids().len()
             ));
         }
-        let old_key = role_keys.key_ids_mut().drain().last().expect("old_key");
-        role_keys.key_ids_mut().insert(new_key_pair.key_id().clone());
-        old_key
+        let old_key_id = role_keys.key_ids_mut().drain().last().ok_or_else(|| {
+            Error::from_kind(ErrorKind::Msg("Missing key id".into()))
+        })?;
+        role_keys.key_ids_mut().insert(new_root.key_id().clone());
+        old_key_id
     };
 
-    // TODO this shouldn't generate a new key, we should have to manually specify which key we want
-    // FIXME: non-rsa keys
-    let new_pub_key = PublicKey::from_pubkey(KeyType::Rsa, new_key_pair.pub_key())
-        .chain_err(|| "unable to get new root public key")?;
-    let _ = meta.keys_mut().remove(&old_key);
+    // remove old targets key
+    {
+        let role_keys = meta.roles_mut().get_mut(&Role::Targets).ok_or_else(|| {
+            Error::from_kind(ErrorKind::Runtime("no current root keys".into()))
+        })?;
+        if role_keys.key_ids().len() != 1 {
+            bail!(format!(
+                "expected 1 role key ID, found {}",
+                role_keys.key_ids().len()
+            ));
+        }
+        let ids = role_keys.key_ids_mut();
+        ids.clear();
+        ids.insert(new_targets.key_id().clone());
+    }
+
+    let _ = meta.keys_mut().remove(&old_key_id);
     let _ = meta.keys_mut().insert(
-        new_key_pair.key_id().clone(),
-        new_pub_key,
+        new_root.key_id().clone(),
+        new_root.as_public_key()?,
     );
 
     // WARNING: any errors after calling DELETE will probably screw the user account
 
-    let old_key_id = HEXLOWER.encode(&old_key);
+    let old_key_id = HEXLOWER.encode(&old_key_id);
     let mut deleted_key = Http::new(cache.config())?
         .delete(&format!(
             "{}/root/private_keys/{}",
@@ -628,28 +675,23 @@ fn cmd_tuf_root_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
         ))?
         .send()?;
     check_status(&mut deleted_key)?;
+
     let old_key: PrivateKey = json::from_reader(deleted_key).chain_err(
         || "failed to parse old root private key as json",
     )?;
-    let old_pem = pem::parse(old_key.private_pem()).chain_err(
-        || "failed to parse old root private key as pem",
-    )?;
-    let old_key_pair = KeyPair::from(old_pem.contents).chain_err(
-        || "failed to parse key pair from old pem private role key",
-    )?;
+    let old_key = old_key.as_key_pair()?;
 
-    let mut old_signed: SignedMetadata<Json, RootMetadata> =
-        SignedMetadata::from(&meta, &old_key_pair)?;
-    let mut new_signed: SignedMetadata<Json, RootMetadata> =
-        SignedMetadata::from(&meta, &new_key_pair)?;
-    new_signed.signatures_mut().append(
-        old_signed.signatures_mut(),
-    );
-    cache.set_signed_root(&new_signed, true)?;
+    cache.add_key(&old_key, old_root)?;
+
+    let mut signed: SignedMetadata<Json, RootMetadata> = SignedMetadata::from(&meta, &new_root)?;
+
+    signed.add_signature(&old_key)?;
+
+    cache.set_signed_root(&signed, true)?;
 
     let mut resp = Http::new(cache.config())?
         .post(&format!("{}/root", cache.config().app().tuf_url()))?
-        .json(&new_signed)?
+        .json(&signed)?
         .send()?;
     check_status(&mut resp)
 }
@@ -667,11 +709,11 @@ fn cmd_tuf_targets_init(cache_path: PathBuf, matches: &ArgMatches) -> Result<()>
 
 // TODO more of this logic should be in the cache and not here
 fn cmd_tuf_targets_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
-    let path = TargetPath::new(matches.value_of("path").unwrap().into()).unwrap();
     let name = matches.value_of("name").unwrap();
     let version = matches.value_of("version").unwrap();
+    let path = TargetPath::new(format!("{}-{}", name, version))?;
     let length = matches.value_of("length").unwrap().parse::<u64>().unwrap();
-    let encoding = Encoding::from_str(&matches.value_of("encoding").unwrap()).unwrap();
+    let encoding = Encoding::Hexlower; // TODO parameterize?
     let force = matches.is_present("force");
 
     let mut hashes = HashMap::new();
@@ -683,15 +725,15 @@ fn cmd_tuf_targets_add(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> 
     }
 
     let url = matches.value_of("url").unwrap();
-    let ids = match matches.values_of("hardware_id") {
-        None => None,
-        Some(vals) => Some(vals.map(String::from).collect::<Vec<_>>()),
-    };
+    let ids = matches.values_of("hardware_id").map(|ids| {
+        ids.map(String::from).collect::<Vec<_>>()
+    });
     let release_counter = matches
         .value_of("release_counter")
         .unwrap()
         .parse()
         .unwrap();
+
     let custom = TargetCustom::new(
         name.into(),
         version.into(),
@@ -720,7 +762,7 @@ fn cmd_tuf_targets_remove(cache_path: PathBuf, matches: &ArgMatches) -> Result<(
 
 fn cmd_tuf_targets_sign(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let cache = get_cache(cache_path)?;
-    let key_name = matches.value_of("key").unwrap();
+    let key_name = matches.value_of("key_name").unwrap();
     let key = cache.get_key(key_name)?;
     let targets = cache.get_unsigned_targets()?;
     let signed: SignedMetadata<Json, TargetsMetadata> = SignedMetadata::from(&targets, &key)?;
@@ -743,7 +785,13 @@ fn cmd_tuf_root_init(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let expires = Utc.datetime_from_str(expires, "%FT%TZ").unwrap();
     let force = matches.is_present("force");
     let cache = get_cache(cache_path)?;
-    let root = RootMetadata::new(version, expires, HashMap::new(), HashMap::new(), consistent_snapshot)?;
+    let root = RootMetadata::new(
+        version,
+        expires,
+        HashMap::new(),
+        HashMap::new(),
+        consistent_snapshot,
+    )?;
     cache.set_unsigned_root(&root, force)?;
     Ok(())
 }
@@ -907,16 +955,19 @@ mod test {
                     "--expires",
                     expires_str,
                     "--version",
-                    &version.to_string()
+                    &version.to_string(),
                 ],
             )
             .unwrap();
         run_main(matches).unwrap();
 
-        let root_path = tmp.path().join("metadata").join("unsigned").join("root.json");
+        let root_path = tmp.path().join("metadata").join("unsigned").join(
+            "root.json",
+        );
         let root = read(root_path);
         let root: RootMetadata = json::from_slice(&root).unwrap();
-        let expected = RootMetadata::new(1, expires, HashMap::new(), HashMap::new(), false).unwrap();
+        let expected = RootMetadata::new(1, expires, HashMap::new(), HashMap::new(), false)
+            .unwrap();
         assert_eq!(root, expected);
     }
 }

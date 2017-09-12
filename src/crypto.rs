@@ -10,14 +10,14 @@ use serde::de::{Deserialize, Deserializer, Error as DeserializeError};
 use serde::ser::{Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::ops::Deref;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::sync::Arc;
 use untrusted::Input;
 
-use error::{Error, ErrorKind, Result};
+use error::{Error, ErrorKind, Result, ResultExt};
 use tuf;
 
 /// 1.2.840.113549.1.1.1 rsaEncryption(PKCS #1)
@@ -450,27 +450,52 @@ impl KeyPair {
             }
 
             KeyType::Rsa => {
-                let gen = Command::new("openssl")
-                    .args(
-                        &[
-                            "genpkey",
-                            "-algorithm",
-                            "RSA",
-                            "-pkeyopt",
-                            "rsa_keygen_bits:2048",
-                            "-pkeyopt",
-                            "rsa_keygen_pubexp:65537",
-                            "-outform",
-                            "der",
-                        ],
-                    )
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .spawn()?;
-                let priv_key = gen.wait_with_output()?.stdout;
+                let priv_key = Self::rsa_gen()?;
                 Self::rsa_from_priv(priv_key)
             }
         }
+    }
+
+
+    fn rsa_gen() -> Result<Vec<u8>> {
+        let gen = Command::new("openssl")
+            .args(
+                &[
+                    "genpkey",
+                    "-algorithm",
+                    "RSA",
+                    "-pkeyopt",
+                    "rsa_keygen_bits:4096",
+                    "-pkeyopt",
+                    "rsa_keygen_pubexp:65537",
+                    "-outform",
+                    "der",
+                ],
+            )
+            .output()?;
+
+        let mut pk8 = Command::new("openssl")
+            .args(
+                &[
+                    "pkcs8",
+                    "-inform",
+                    "der",
+                    "-topk8",
+                    "-nocrypt",
+                    "-outform",
+                    "der",
+                ],
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        match pk8.stdin {
+            Some(ref mut stdin) => stdin.write_all(&gen.stdout)?,
+            None => bail!(ErrorKind::Crypto("openssl had no stdin".into())),
+        };
+
+        Ok(pk8.wait_with_output()?.stdout)
     }
 
     /// Initialize the `KeyPair` of a known type from the DER bytes of the private key.
@@ -556,7 +581,8 @@ impl KeyPair {
     }
 
     fn rsa_from_priv(priv_key: Vec<u8>) -> Result<Self> {
-        let pair = RSAKeyPair::from_der(Input::from(&priv_key)).map_err(|_| {
+        use data_encoding::BASE64;
+        let pair = RSAKeyPair::from_pkcs8(Input::from(&priv_key)).map_err(|_| {
             ErrorKind::Crypto("Could not parse DER RSA private key".into())
         })?;
         if pair.public_modulus_len() < 256 {
@@ -564,8 +590,10 @@ impl KeyPair {
             let err = format!("RSA public modulus must be >= 2048. Size: {}", len);
             bail!(ErrorKind::IllegalArgument(err));
         }
+
     
-        let pub_key = extract_rsa_pub_from_pkcs8(&priv_key)?;
+        let pub_key = extract_rsa_pub_from_pkcs8(&priv_key)
+            .chain_err(|| "Could not extract RSA pub from PKCS#8")?;
 
         Ok(KeyPair {
             inner: KeyPairInner::Rsa(Arc::new(pair)),
@@ -860,10 +888,20 @@ fn write_pkcs1(n: &[u8], e: &[u8]) -> ::std::result::Result<Vec<u8>, derp::Error
     Ok(output)
 }
 
-
 #[cfg(test)]
 mod test {
     use super::*;
+
+    const RSA_2048_PK8: &'static [u8] = include_bytes!("../tests/rsa-2048.pk8.der");
+    const RSA_2048_PKCS1: &'static [u8] = include_bytes!("../tests/rsa-2048.pkcs1.der");
+
+    const RSA_4096_PK8: &'static [u8] = include_bytes!("../tests/rsa-4096.pk8.der");
+    const RSA_4096_PKCS1: &'static [u8] = include_bytes!("../tests/rsa-4096.pkcs1.der");
+
+    #[test]
+    fn new_rsa_key() {
+        let _ = KeyPair::new(KeyType::Rsa).unwrap();
+    }
 
     #[test]
     fn ring_to_bouncy_castle_conversion() {
@@ -876,5 +914,17 @@ mod test {
             };
             wrap_ed25519_public_point(pub_key).unwrap();
         }
+    }
+
+    #[test]
+    fn extract_pkcs1_from_rsa_2048_pkcs8() {
+        let res = extract_rsa_pub_from_pkcs8(RSA_2048_PK8).unwrap();
+        assert_eq!(res.as_slice(), RSA_2048_PKCS1);
+    }
+
+    #[test]
+    fn extract_pkcs1_from_rsa_4096_pkcs8() {
+        let res = extract_rsa_pub_from_pkcs8(RSA_4096_PK8).unwrap();
+        assert_eq!(res.as_slice(), RSA_4096_PKCS1);
     }
 }

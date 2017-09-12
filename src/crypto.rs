@@ -377,13 +377,6 @@ impl KeyType {
             }
         }
     }
-
-    fn as_oid(&self) -> &'static [u8] {
-        match self {
-            &KeyType::Rsa => RSA_SPKI_OID,
-            &KeyType::Ed25519 => ED25519_SPKI_OID,
-        }
-    }
 }
 
 impl FromStr for KeyType {
@@ -581,7 +574,6 @@ impl KeyPair {
     }
 
     fn rsa_from_priv(priv_key: Vec<u8>) -> Result<Self> {
-        use data_encoding::BASE64;
         let pair = RSAKeyPair::from_pkcs8(Input::from(&priv_key)).map_err(|_| {
             ErrorKind::Crypto("Could not parse DER RSA private key".into())
         })?;

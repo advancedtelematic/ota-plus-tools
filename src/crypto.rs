@@ -10,7 +10,7 @@ use serde::de::{Deserialize, Deserializer, Error as DeserializeError};
 use serde::ser::{Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::ops::Deref;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -377,6 +377,13 @@ impl KeyType {
             }
         }
     }
+
+    fn as_oid(&self) -> &'static [u8] {
+        match self {
+            &KeyType::Rsa => RSA_SPKI_OID,
+            &KeyType::Ed25519 => ED25519_SPKI_OID,
+        }
+    }
 }
 
 impl FromStr for KeyType {
@@ -557,23 +564,15 @@ impl KeyPair {
             let err = format!("RSA public modulus must be >= 2048. Size: {}", len);
             bail!(ErrorKind::IllegalArgument(err));
         }
+    
+        let pub_key = extract_rsa_pub_from_pkcs8(&priv_key)?;
+
         Ok(KeyPair {
             inner: KeyPairInner::Rsa(Arc::new(pair)),
-            key_id: KeyId::calculate(&Self::rsa_get_pub(&priv_key)?),
-            pub_key: PubKeyValue(Self::rsa_get_pub(&priv_key)?),
+            key_id: KeyId::calculate(&pub_key),
+            pub_key: PubKeyValue(pub_key),
             priv_key: PrivKeyValue(priv_key),
         })
-    }
-
-    fn rsa_get_pub(priv_key: &[u8]) -> Result<Vec<u8>> {
-        let mut pub_key = Command::new("openssl")
-            .args(&["rsa", "-inform", "der", "-pubout", "-outform", "der"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
-        pub_key.stdin.as_mut().expect("stdin").write_all(priv_key)?;
-        Ok(pub_key.wait_with_output()?.stdout)
     }
 }
 
@@ -814,6 +813,53 @@ impl Deref for PubKeyValue {
         &self.0
     }
 }
+
+fn extract_rsa_pub_from_pkcs8(der_key: &[u8]) -> ::std::result::Result<Vec<u8>, derp::Error> {
+    let input = Input::from(der_key);
+    input.read_all(derp::Error::Read, |input| {
+        derp::nested(input, Tag::Sequence, |input| {
+            if derp::small_nonnegative_integer(input)? != 0 {
+                return Err(derp::Error::WrongValue);
+            }
+
+            derp::nested(input, Tag::Sequence, |input| {
+                let actual_alg_id = derp::expect_tag_and_get_value(input, Tag::Oid)?;
+                if actual_alg_id.as_slice_less_safe() != RSA_SPKI_OID {
+                    return Err(derp::Error::WrongValue);
+                }
+                let _ = derp::expect_tag_and_get_value(input, Tag::Null)?;
+                Ok(())
+            })?;
+
+            derp::nested(input, Tag::OctetString, |input| {
+                derp::nested(input, Tag::Sequence, |input| {
+                    if derp::small_nonnegative_integer(input)? != 0 {
+                        return Err(derp::Error::WrongValue);
+                    }
+
+                    let n = derp::positive_integer(input)?;
+                    let e = derp::positive_integer(input)?;
+                    let _ = input.skip_to_end();
+                    write_pkcs1(n.as_slice_less_safe(), e.as_slice_less_safe())
+                })
+            })
+        })
+    })
+}
+
+fn write_pkcs1(n: &[u8], e: &[u8]) -> ::std::result::Result<Vec<u8>, derp::Error> {
+    let mut output = Vec::new();
+    {
+        let mut der = Der::new(&mut output);
+        der.sequence(|der| {
+            der.positive_integer(n)?;
+            der.positive_integer(e)
+        })?;
+    }
+
+    Ok(output)
+}
+
 
 #[cfg(test)]
 mod test {

@@ -19,7 +19,7 @@ help: ## Print this message
 clean: ## Remove temp/useless files
 	@find . -name '*.rs.bk' -type f -delete
 
-.PHONY: dev-dovs
+.PHONY: dev-docs
 dev-docs: ## Generate the documentation for all modules (dev friendly)
 	@cargo rustdoc --all-features --open -- --no-defaults --passes "collapse-docs" --passes "unindent-comments"
 

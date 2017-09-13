@@ -8,6 +8,7 @@ extern crate ota_plus;
 extern crate serde_json as json;
 #[cfg(test)]
 extern crate tempdir;
+extern crate pem;
 extern crate reqwest;
 
 use chrono::offset::Utc;
@@ -32,10 +33,11 @@ use std::str::FromStr;
 
 error_chain! {
     foreign_links {
+        DataEncodingDecode(data_encoding::DecodeError);
         Io(io::Error);
         Json(json::Error);
-        DataEncodingDecode(data_encoding::DecodeError);
         Http(reqwest::Error);
+        Pem(pem::Error);
     }
 
     links {
@@ -594,27 +596,21 @@ fn cmd_tuf_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let new_root = matches.value_of("new_root_key_name").unwrap();
     let old_root = matches.value_of("previous_key_alias").unwrap();
     let new_targets = matches.value_of("new_targets_key_name").unwrap();
-
     let cache = get_cache(cache_path)?;
 
-    let new_root = cache.get_key(new_root).chain_err(
-        || "no local root key found",
-    )?;
-    let new_targets = cache.get_key(new_targets).chain_err(
-        || "no local targets get found",
-    )?;
+    let new_root = cache.get_key(new_root).chain_err(|| "no local root key found")?;
+    let new_targets = cache.get_key(new_targets).chain_err(|| "no local targets get found")?;
 
-    let old_meta = Http::new(cache.config())?
+    let meta = Http::new(cache.config())?
         .get(&format!("{}/root", cache.config().app().tuf_url()))?
         .send()?;
-
     // TODO this is unsafe because we don't know that this root is really what we want
     // we'd need to do some TUF verification on it
-    let mut meta: RootMetadata = json::from_reader(old_meta).chain_err(
+    let mut meta: RootMetadata = json::from_reader(meta).chain_err(
         || "unable to read current root metadata",
     )?;
 
-    let old_key_id = {
+    let old_root_id = {
         let role_keys = meta.roles_mut().get_mut(&Role::Root).ok_or_else(|| {
             Error::from_kind(ErrorKind::Runtime("no current root keys".into()))
         })?;
@@ -624,37 +620,45 @@ fn cmd_tuf_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
                 role_keys.key_ids().len()
             ));
         }
-        let old_key_id = role_keys.key_ids_mut().drain().last().ok_or_else(|| {
+        let old_root_id = role_keys.key_ids_mut().drain().last().ok_or_else(|| {
             Error::from_kind(ErrorKind::Msg("Missing key id".into()))
         })?;
         role_keys.key_ids_mut().insert(new_root.key_id().clone());
-        old_key_id
+        old_root_id
     };
 
     // remove old targets key
-    {
+    let old_targets_id = {
         let role_keys = meta.roles_mut().get_mut(&Role::Targets).ok_or_else(|| {
-            Error::from_kind(ErrorKind::Runtime("no current root keys".into()))
+            Error::from_kind(ErrorKind::Runtime("no current targets keys".into()))
         })?;
-        let ids = role_keys.key_ids_mut();
-        ids.clear();
-        ids.insert(new_targets.key_id().clone());
-    }
+        if role_keys.key_ids().len() != 1 {
+            bail!(format!(
+                "expected 1 role key ID, found {}",
+                role_keys.key_ids().len()
+            ));
+        }
+        let old_targets_id = role_keys.key_ids_mut().drain().last().ok_or_else(|| {
+            Error::from_kind(ErrorKind::Msg("Missing key id".into()))
+        })?;
+        role_keys.key_ids_mut().insert(new_targets.key_id().clone());
+        old_targets_id
+    };
 
-    let _ = meta.keys_mut().remove(&old_key_id);
-    let _ = meta.keys_mut().insert(
-        new_root.key_id().clone(),
-        new_root.as_public_key()?,
-    );
+    let _ = meta.keys_mut().remove(&old_root_id);
+    let _ = meta.keys_mut().remove(&old_targets_id);
+    let _ = meta.keys_mut().insert(new_root.key_id().clone(), new_root.as_public_key()?);
+    let _ = meta.keys_mut().insert(new_targets.key_id().clone(), new_targets.as_public_key()?);
+    let old_version = meta.version();
+    meta.set_version(old_version + 1);
 
     // WARNING: any errors after calling DELETE will probably screw the user account
 
-    let old_key_id = HEXLOWER.encode(&old_key_id);
     let mut deleted_key = Http::new(cache.config())?
         .delete(&format!(
             "{}/root/private_keys/{}",
             cache.config().app().tuf_url(),
-            old_key_id
+            &HEXLOWER.encode(&old_root_id),
         ))?
         .send()?;
     check_status(&mut deleted_key)?;
@@ -662,7 +666,12 @@ fn cmd_tuf_rotate(cache_path: PathBuf, matches: &ArgMatches) -> Result<()> {
     let old_key: PrivateKey = json::from_reader(deleted_key).chain_err(
         || "failed to parse old root private key as json",
     )?;
-    let old_key = old_key.as_key_pair()?;
+
+    // By default, the key comes as an RSA PKCS#1 PEM key
+    let old_key = pem::parse(old_key.private_pem())
+        .map_err(Error::from)
+        .and_then(|p| KeyPair::from_rsa_pkcs1(&p.contents).map_err(Error::from))
+        .or_else(|_| old_key.as_key_pair())?;
 
     cache.add_key(&old_key, old_root)?;
 

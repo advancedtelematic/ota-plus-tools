@@ -1,6 +1,5 @@
 //! TUF metadata.
 
-use data_encoding::HEXLOWER;
 use chrono::DateTime;
 use chrono::offset::Utc;
 use serde::de::{Deserialize, Deserializer, DeserializeOwned, Error as DeserializeError};
@@ -148,6 +147,11 @@ impl RootMetadata {
             roles,
             consistent_snapshot,
         })
+    }
+
+    /// Set the metadata's version.
+    pub fn set_version(&mut self, version: u32) {
+        self.version = version;
     }
 
     /// The metadata's version.
@@ -605,15 +609,12 @@ impl PublicKey {
         Ok(PublicKey {
             key_type: typ,
             key_val: PublicKeyValue {
-                public: match typ {
-                    crypto::KeyType::Ed25519 => HEXLOWER.encode(&*public),
-                    crypto::KeyType::Rsa => {
-                        let p = Pem {
-                            tag: "PUBLIC KEY".into(),
-                            contents: public.to_vec(),
-                        };
-                        pem::encode(&p).replace("\r", "")
-                    }
+                public: {
+                    let p = Pem {
+                        tag: "PUBLIC KEY".into(),
+                        contents: (*public).to_vec(),
+                    };
+                    pem::encode(&p).replace("\r", "")
                 },
             },
         })

@@ -409,7 +409,6 @@ impl KeyPairInner {
     }
 }
 
-
 /// A public/privat key pair.
 pub struct KeyPair {
     inner: KeyPairInner,
@@ -491,7 +490,7 @@ impl KeyPair {
         Ok(pk8.wait_with_output()?.stdout)
     }
 
-    /// Initialize the `KeyPair` of a known type from the DER bytes of the private key.
+    /// Initialize the `KeyPair` of a known type from the PKCS#8 DER bytes of the private key.
     pub fn from(priv_key: Vec<u8>) -> Result<Self> {
         match Ed25519KeyPair::from_pkcs8(Input::from(&priv_key)) {
             Ok(pair) => {
@@ -516,6 +515,10 @@ impl KeyPair {
                 }
             }
         }
+    }
+
+    pub fn from_rsa_pkcs1(priv_key: &[u8]) -> Result<Self> {
+        Self::rsa_from_priv(pkcs8_wrap_rsa(priv_key)?)
     }
 
     pub fn typ(&self) -> KeyType {
@@ -583,9 +586,10 @@ impl KeyPair {
             bail!(ErrorKind::IllegalArgument(err));
         }
 
-    
-        let pub_key = extract_rsa_pub_from_pkcs8(&priv_key)
-            .chain_err(|| "Could not extract RSA pub from PKCS#8")?;
+        let pub_key = rsa_pkcs1_to_spki(&extract_rsa_pub_from_pkcs8(&priv_key)
+            .chain_err(|| "Could not extract RSA pub from PKCS#8")?)
+            .chain_err(|| "Could not convert RSA PKCS#1 to SPKI")?
+            .to_vec();
 
         Ok(KeyPair {
             inner: KeyPairInner::Rsa(Arc::new(pair)),
@@ -867,6 +871,37 @@ fn extract_rsa_pub_from_pkcs8(der_key: &[u8]) -> ::std::result::Result<Vec<u8>, 
     })
 }
 
+pub fn rsa_pkcs1_to_spki(pkcs1: &[u8]) -> ::std::result::Result<Vec<u8>, derp::Error> {
+    let mut out = Vec::new();
+
+    {
+        let mut der = Der::new(&mut out);
+        der.sequence(|der| {
+            der.sequence(|der| {
+                der.oid(RSA_SPKI_OID)?;
+                der.null()
+            })?;
+            der.bit_string(0, pkcs1)
+        })?;
+    }
+
+    Ok(out)
+}
+
+pub fn rsa_spki_to_pkcs1<'a>(spki: &'a [u8]) -> ::std::result::Result<&'a [u8], derp::Error> {
+    let input = Input::from(spki);
+    input.read_all(derp::Error::Read, |input| {
+        derp::nested(input, Tag::Sequence, |input| {
+            derp::nested(input, Tag::Sequence, |input| {
+                let _ = derp::expect_tag_and_get_value(input, Tag::Oid)?;
+                derp::expect_tag_and_get_value(input, Tag::Null)
+            })?;
+            derp::bit_string_with_no_unused_bits(input)
+        })
+    })
+    .map(|i| i.as_slice_less_safe())
+}
+
 fn write_pkcs1(n: &[u8], e: &[u8]) -> ::std::result::Result<Vec<u8>, derp::Error> {
     let mut output = Vec::new();
     {
@@ -880,15 +915,37 @@ fn write_pkcs1(n: &[u8], e: &[u8]) -> ::std::result::Result<Vec<u8>, derp::Error
     Ok(output)
 }
 
+fn pkcs8_wrap_rsa(priv_key: &[u8]) -> Result<Vec<u8>> {
+    let mut wrapped_bytes = Vec::new();
+
+    {
+        let mut der = Der::new(&mut wrapped_bytes);
+        der.sequence(|der| {
+            der.positive_integer(&[0x00])?;
+            der.sequence(|der| {
+                der.oid(RSA_SPKI_OID)?;
+                der.null()
+            })?;
+            der.octet_string(&priv_key)
+        })?;
+    }
+
+    Ok(wrapped_bytes)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
     const RSA_2048_PK8: &'static [u8] = include_bytes!("../tests/rsa-2048.pk8.der");
-    const RSA_2048_PKCS1: &'static [u8] = include_bytes!("../tests/rsa-2048.pkcs1.der");
+    const RSA_2048_SPKI: &'static [u8] = include_bytes!("../tests/rsa-2048.spki.der");
+    const RSA_2048_PKCS1: &'static [u8] = include_bytes!("../tests/rsa-2048.der");
+    const RSA_2048_PKCS1_PUB: &'static [u8] = include_bytes!("../tests/rsa-2048.pkcs1.der");
 
     const RSA_4096_PK8: &'static [u8] = include_bytes!("../tests/rsa-4096.pk8.der");
-    const RSA_4096_PKCS1: &'static [u8] = include_bytes!("../tests/rsa-4096.pkcs1.der");
+    const RSA_4096_SPKI: &'static [u8] = include_bytes!("../tests/rsa-4096.spki.der");
+    const RSA_4096_PKCS1: &'static [u8] = include_bytes!("../tests/rsa-4096.der");
+    const RSA_4096_PKCS1_PUB: &'static [u8] = include_bytes!("../tests/rsa-4096.pkcs1.der");
 
     #[test]
     fn new_rsa_key() {
@@ -911,12 +968,68 @@ mod test {
     #[test]
     fn extract_pkcs1_from_rsa_2048_pkcs8() {
         let res = extract_rsa_pub_from_pkcs8(RSA_2048_PK8).unwrap();
-        assert_eq!(res.as_slice(), RSA_2048_PKCS1);
+        assert_eq!(res.as_slice(), RSA_2048_PKCS1_PUB);
     }
 
     #[test]
     fn extract_pkcs1_from_rsa_4096_pkcs8() {
         let res = extract_rsa_pub_from_pkcs8(RSA_4096_PK8).unwrap();
-        assert_eq!(res.as_slice(), RSA_4096_PKCS1);
+        assert_eq!(res.as_slice(), RSA_4096_PKCS1_PUB);
+    }
+
+    #[test]
+    fn test_pkcs8_wrap_rsa() {
+        let wrapped = pkcs8_wrap_rsa(RSA_2048_PKCS1).unwrap();
+        assert!(
+            wrapped.as_slice() == RSA_2048_PK8,
+            "new: {}\norig: {}",
+            BASE64.encode(&wrapped),
+            BASE64.encode(RSA_2048_PK8),
+        );
+
+        let wrapped = pkcs8_wrap_rsa(RSA_4096_PKCS1).unwrap();
+        assert!(
+            wrapped.as_slice() == RSA_4096_PK8,
+            "new: {}\norig: {}",
+            BASE64.encode(&wrapped),
+            BASE64.encode(RSA_4096_PK8),
+        );
+    }
+
+    #[test]
+    fn rsa_from_pkcs1() {
+        let _ = KeyPair::from_rsa_pkcs1(RSA_2048_PKCS1).unwrap();
+        let _ = KeyPair::from_rsa_pkcs1(RSA_4096_PKCS1).unwrap();
+    }
+
+    #[test]
+    fn test_rsa_spki_to_pkcs1() {
+        let unwrapped = rsa_spki_to_pkcs1(RSA_2048_SPKI).unwrap();
+        assert!(
+            unwrapped == RSA_2048_PKCS1_PUB,
+            "new: {}\norig: {}",
+            BASE64.encode(&unwrapped),
+            BASE64.encode(RSA_2048_PKCS1_PUB),
+        );
+
+        let unwrapped = rsa_spki_to_pkcs1(RSA_4096_SPKI).unwrap();
+        assert!(
+            unwrapped == RSA_4096_PKCS1_PUB,
+            "new: {}\norig: {}",
+            BASE64.encode(&unwrapped),
+            BASE64.encode(RSA_4096_PKCS1_PUB),
+        );
+    }
+
+    #[test]
+    fn rsa_as_public_key() {
+        let pair = KeyPair::from_rsa_pkcs1(RSA_2048_PKCS1).unwrap(); 
+        let _ = pair.as_public_key().unwrap();
+    }
+
+    #[test]
+    fn ed25519_as_public_key() {
+        let pair = KeyPair::new(KeyType::Ed25519).unwrap(); 
+        let _ = pair.as_public_key().unwrap();
     }
 }

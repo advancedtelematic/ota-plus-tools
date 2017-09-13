@@ -614,7 +614,7 @@ impl PublicKey {
                         tag: "PUBLIC KEY".into(),
                         contents: (*public).to_vec(),
                     };
-                    pem::encode(&p).replace("\r", "").trim().into()
+                    pem::encode(&p).replace("\r", "")
                 },
             },
         })

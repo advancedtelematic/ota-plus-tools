@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-DOCKER_RUST := advancedtelematic/rust:x86-1.19.0
+DOCKER_RUST := advancedtelematic/rust:x86-1.20.0
 
 DOCKER_RUN := \
 	@docker run --rm \
@@ -9,7 +9,8 @@ DOCKER_RUN := \
 		--volume ~/.cargo/git:/root/.cargo/git \
 		--volume ~/.cargo/registry:/root/.cargo/registry \
 		--volume $(CURDIR):/src \
-		--workdir /src
+		--workdir /src \
+		$(DOCKER_RUST)
 
 .PHONY: help
 help: ## Print this message
@@ -30,3 +31,8 @@ check: ## Runs `cargo check` in the dockerized environment
 .PHONY: test
 test: ## Runs `cargo test` in the dockerized environment
 	$(DOCKER_RUN) cargo test
+
+
+.PHONY: build
+build: ## Runs `cargo build` in the docerized environment
+	$(DOCKER_RUN) cargo build
